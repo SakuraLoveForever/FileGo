@@ -68,6 +68,13 @@ class Executor(threading.Thread):
         self._queue.put((task, group, run_skipped))
 
     def stop(self) -> None:
+        """停止执行器（非阻塞，安全可在 GUI 线程调用）。
+
+        发送停止信号和哨兵值后立即返回。
+        正在运行的任务由 daemon 线程自然终止。
+        """
         self._stop_event.set()
-        self._running_event.wait(timeout=30.0)
-        self._queue.put((None, None, False))
+        try:
+            self._queue.put((None, None, False))  # 哨兵，打破 run() 中的循环
+        except Exception:
+            pass

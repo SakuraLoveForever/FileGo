@@ -47,6 +47,11 @@ class MainWindow:
         # 关闭行为
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
+        # 绑定托盘线程安全虚拟事件（event_generate 是 tkinter 唯一线程安全的方法）
+        self.root.bind("<<TrayShow>>", lambda e: self.restore_from_tray())
+        self.root.bind("<<TrayRunAll>>", lambda e: self._on_run_all())
+        self.root.bind("<<TrayExit>>", lambda e: self.app.shutdown())
+
         self._build()
         self.refresh_all()
         self._schedule_refresh()
@@ -201,40 +206,87 @@ class MainWindow:
         self.root.after(30000, self._schedule_refresh)
 
     def _schedule_autosave(self):
-        """定期自动保存，防止意外退出丢数据。"""
+        """定期自动保存（30秒间隔），防止意外退出丢数据。"""
         try:
             self.app.save_state()
         except Exception:
             pass
-        self.root.after(60000, self._schedule_autosave)
+        self.root.after(30000, self._schedule_autosave)
 
     def _hook_shutdown(self):
-        """拦截 Windows 关机/注销消息，提前保存数据。"""
+        """拦截 Windows 关机/注销消息，提前保存数据。
+
+        使用 Window 子类化（Subclassing）拦截 WM_QUERYENDSESSION
+        和 WM_ENDSESSION 消息，确保在系统关机前保存数据。
+        """
         try:
             import ctypes
-            import ctypes.wintypes
+            from ctypes import wintypes
+
+            WM_QUERYENDSESSION = 0x0011
+            WM_ENDSESSION = 0x0016
+            GWLP_WNDPROC = -4
+
+            # wintypes 没有 LRESULT，用 LPARAM 替代（都是 LONG_PTR）
+            LRESULT = wintypes.LPARAM
+
+            # 获取 tk 顶层窗口句柄
+            hwnd = self.root.winfo_id()
+
+            # 定义窗口过程函数类型（使用 wintypes 确保 64 位兼容）
+            WNDPROC = ctypes.WINFUNCTYPE(
+                LRESULT,
+                wintypes.HWND,
+                wintypes.UINT,
+                wintypes.WPARAM,
+                wintypes.LPARAM,
+            )
+
+            # 设置 SetWindowLongPtrW 参数类型
+            user32 = ctypes.windll.user32
+            user32.SetWindowLongPtrW.argtypes = [
+                wintypes.HWND, ctypes.c_int, wintypes.LONG_PTR,
+            ]
+            user32.SetWindowLongPtrW.restype = wintypes.LONG_PTR
+            user32.GetWindowLongPtrW.argtypes = [
+                wintypes.HWND, ctypes.c_int,
+            ]
+            user32.GetWindowLongPtrW.restype = wintypes.LONG_PTR
+
+            # 保存原始窗口过程
+            old_proc_addr = user32.GetWindowLongPtrW(hwnd, GWLP_WNDPROC)
+            self._old_wnd_proc = WNDPROC(old_proc_addr)
 
             def wnd_proc(hwnd, msg, wparam, lparam):
-                if msg == 0x0011:  # WM_QUERYENDSESSION
+                if msg == WM_QUERYENDSESSION:
                     try:
                         self.app.save_state()
                         self.app.store.save_config(self.app.config)
-                    except Exception:
-                        pass
-                return ctypes.windll.user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+                        logger.info("WM_QUERYENDSESSION: 数据已保存，允许关机")
+                    except Exception as e:
+                        logger.error(f"关机保存失败: {e}")
+                    return 1  # TRUE → 允许关机
 
-            # 获取 tk 窗口句柄
-            hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
-            if hwnd:
-                self._old_wnd_proc = ctypes.windll.user32.SetWindowLongPtrW(
-                    hwnd, -4,  # GWL_WNDPROC
-                    ctypes.cast(ctypes.WINFUNCTYPE(
-                        ctypes.c_longlong, ctypes.c_longlong,
-                        ctypes.c_uint, ctypes.c_longlong, ctypes.c_longlong
-                    )(wnd_proc), ctypes.c_void_p).value
-                )
-        except Exception:
-            pass  # 非 Windows 或权限不足，忽略
+                elif msg == WM_ENDSESSION:
+                    if wparam:  # 真正关机
+                        try:
+                            self.app.save_state()
+                            self.app.store.save_config(self.app.config)
+                            logger.info("WM_ENDSESSION: 最终数据已保存")
+                        except Exception as e:
+                            logger.error(f"关机最终保存失败: {e}")
+
+                # 转发到原始窗口过程
+                return self._old_wnd_proc(hwnd, msg, wparam, lparam)
+
+            # 子类化窗口
+            self._new_wnd_proc = WNDPROC(wnd_proc)
+            new_proc_addr = ctypes.cast(self._new_wnd_proc, wintypes.LONG_PTR).value
+            user32.SetWindowLongPtrW(hwnd, GWLP_WNDPROC, new_proc_addr)
+            logger.info("已注册 Windows 关机钩子")
+
+        except Exception as e:
+            logger.warning(f"注册关机钩子失败 (非关键): {e}")
 
     # ---- 任务操作 ----
 
@@ -344,6 +396,7 @@ class MainWindow:
         self.app.save_state()  # 立即保存
         if self.app.config.get("close_to_tray", True) and HAS_TRAY:
             self.root.withdraw()
+            self.app.show_tray()  # 窗口隐藏后显示托盘图标
             self._set_status("已最小化到系统托盘")
         else:
             self._on_exit()
@@ -385,17 +438,32 @@ class MainWindow:
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
+        self.app.hide_tray()  # 窗口恢复后隐藏托盘图标
         self._set_status("窗口已恢复")
 
     def show(self, start_hidden: bool = False):
+        # 检查是否有数据恢复消息需要展示
+        recovery_msgs = self.app.get_recovery_messages()
+        if recovery_msgs:
+            def _show_recovery():
+                for msg in recovery_msgs:
+                    messagebox.showwarning("FileGo — 数据恢复通知", msg)
+            self.root.after(500, _show_recovery)
+
         if start_hidden or (self.app.config.get("minimize_to_tray", False) and HAS_TRAY):
             self.root.withdraw()
+            self.app.show_tray()  # 窗口启动隐藏 → 显示托盘图标
         else:
             self.root.deiconify()
         self.root.mainloop()
 
     def destroy(self):
+        """销毁窗口并退出主循环。"""
         try:
-            self.root.destroy()
+            self.root.quit()     # 先退出 mainloop
+        except Exception:
+            pass
+        try:
+            self.root.destroy()  # 再销毁窗口
         except Exception:
             pass

@@ -20,6 +20,7 @@ class Scheduler(threading.Thread):
         groups_provider: Callable[[], List[TaskGroup]],
         executor: "Executor",  # noqa: F821
         config: dict,
+        on_state_changed: Callable[[], None] | None = None,
     ):
         super().__init__(daemon=True, name="FileGo-Scheduler")
         self._groups_provider = groups_provider
@@ -29,6 +30,7 @@ class Scheduler(threading.Thread):
         self._wake_event = threading.Event()
         self._lock = threading.Lock()
         self._on_status: Callable[[str], None] | None = None  # 状态回调
+        self._on_state_changed = on_state_changed  # 状态变更保存回调
 
     def set_status_callback(self, cb: Callable[[str], None]) -> None:
         """设置状态栏更新回调。"""
@@ -52,6 +54,7 @@ class Scheduler(threading.Thread):
         now = datetime.now()
         next_event_info = ""  # 状态栏显示
         min_next_run = None
+        state_changed = False  # 跟踪是否有状态变更
 
         with self._lock:
             for group in groups:
@@ -72,6 +75,7 @@ class Scheduler(threading.Thread):
                         next_run = task.compute_next_run(now)
                         if next_run:
                             task.next_run = next_run.isoformat()
+                            state_changed = True
 
                     if next_run is None:
                         continue
@@ -83,6 +87,7 @@ class Scheduler(threading.Thread):
                         # 计算下次运行时间
                         new_next = task.compute_next_run(now)
                         task.next_run = new_next.isoformat() if new_next else None
+                        state_changed = True
                         # 立即检查是否再次到期（间隔可能很短）
                         if new_next and new_next <= now:
                             new_next = None
@@ -92,15 +97,16 @@ class Scheduler(threading.Thread):
                     if next_run:
                         if min_next_run is None or next_run < min_next_run:
                             min_next_run = next_run
+                            src_label = (task.sources[0] if task.sources else "")[:20]
                             if task.schedule_type == "daily":
                                 next_event_info = (
                                     f"下次: {next_run.strftime('%m-%d %H:%M')} "
-                                    f"({group.name}/{task.source[:20]})"
+                                    f"({group.name}/{src_label})"
                                 )
                             else:
                                 next_event_info = (
                                     f"下次: {next_run.strftime('%H:%M:%S')} "
-                                    f"({group.name}/{task.source[:20]})"
+                                    f"({group.name}/{src_label})"
                                 )
 
         # 更新状态栏
@@ -109,6 +115,13 @@ class Scheduler(threading.Thread):
                 self._on_status(next_event_info)
             else:
                 self._on_status("无待执行任务")
+
+        # 如果本次 tick 修改了任务状态，触发保存
+        if state_changed and self._on_state_changed:
+            try:
+                self._on_state_changed()
+            except Exception as e:
+                logger.error(f"调度器保存状态失败: {e}")
 
         # 计算睡眠时间
         poll_interval = self._config.get("poll_interval_seconds", 15)

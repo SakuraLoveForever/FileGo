@@ -49,6 +49,15 @@ class App:
         # 加载数据
         self._load_data()
 
+        # 保留恢复消息供 UI 展示
+        self._recovery_messages = self.store.recovery_messages
+
+    def get_recovery_messages(self) -> List[str]:
+        """获取并清空数据恢复消息（供 UI 展示）。"""
+        msgs = self._recovery_messages.copy()
+        self._recovery_messages.clear()
+        return msgs
+
     def _load_data(self):
         """加载任务和配置。"""
         logger.info("加载数据...")
@@ -83,11 +92,12 @@ class App:
         self.executor = Executor(on_result=self._on_task_result)
         self.executor.start()
 
-        # 创建调度器
+        # 创建调度器（传入 save_state 回调，确保调度器修改 next_run 后持久化）
         self.scheduler = Scheduler(
             groups_provider=self._get_groups_snapshot,
             executor=self.executor,
             config=self.config,
+            on_state_changed=self.save_state,
         )
         self.scheduler.start()
 
@@ -97,12 +107,12 @@ class App:
         # 设置调度器状态回调
         self.scheduler.set_status_callback(self.main_window._set_status)
 
-        # 单实例锁监听（收到新实例时显示窗口）
+        # 单实例锁监听（收到新实例时显示窗口，when='tail' 确保事件排队到 GUI 线程）
         if self._lock_socket:
             self._lock_thread = start_listener(
                 self._lock_socket,
-                on_show=lambda: self.main_window.root.after(
-                    0, self.main_window.restore_from_tray
+                on_show=lambda: self.main_window.root.event_generate(
+                    "<<TrayShow>>", when="tail"
                 ),
             )
 
@@ -114,14 +124,34 @@ class App:
         self.main_window.show(start_hidden=start_hidden)
 
     def _setup_tray(self):
-        """初始化系统托盘。"""
+        """初始化系统托盘。
+
+        所有回调通过 event_generate() 发送虚拟事件到 GUI 线程 —
+        这是 tkinter 唯一线程安全的跨线程通信方式。
+        """
         self.tray_icon = TrayIcon()
         self.tray_icon.set_callbacks({
-            "on_show": self.main_window.restore_from_tray,
-            "on_run_all": self.main_window._on_run_all,
-            "on_exit": self.shutdown,
+            "on_show": lambda: self.main_window.root.event_generate(
+                "<<TrayShow>>", when="tail"
+            ),
+            "on_run_all": lambda: self.main_window.root.event_generate(
+                "<<TrayRunAll>>", when="tail"
+            ),
+            "on_exit": lambda: self.main_window.root.event_generate(
+                "<<TrayExit>>", when="tail"
+            ),
         })
         self.tray_icon.setup()
+
+    def show_tray(self):
+        """显示托盘图标（窗口最小化到托盘时调用）。"""
+        if self.tray_icon:
+            self.tray_icon.show_icon()
+
+    def hide_tray(self):
+        """隐藏托盘图标（窗口恢复时调用）。"""
+        if self.tray_icon:
+            self.tray_icon.hide_icon()
 
     def _get_groups_snapshot(self) -> List[TaskGroup]:
         """获取任务组的快照（线程安全）。"""
@@ -179,30 +209,32 @@ class App:
             logger.error(f"保存配置失败: {e}")
 
     def shutdown(self):
-        """安全关闭应用程序。"""
+        """安全关闭应用程序（可在任何线程中调用）。"""
         logger.info("FileGo 正在关闭...")
 
-        # 1. 停止调度器
+        # 1. 先停止托盘图标 — 必须在其他操作之前，
+        #    避免 pystray 回调与其他清理步骤发生死锁
+        if self.tray_icon:
+            logger.info("停止托盘图标...")
+            self.tray_icon.stop()
+
+        # 2. 停止调度器（非阻塞）
         if self.scheduler:
             logger.info("停止调度器...")
             self.scheduler.stop()
 
-        # 2. 停止执行器
+        # 3. 停止执行器（非阻塞，发送哨兵后立即返回）
         if self.executor:
             logger.info("停止执行器...")
             self.executor.stop()
 
-        # 3. 保存最终状态
+        # 4. 保存最终状态
         with self._groups_lock:
             try:
                 self.store.save_groups(self.groups)
                 logger.info("已保存最终状态")
             except OSError as e:
                 logger.error(f"保存最终状态失败: {e}")
-
-        # 4. 停止托盘
-        if self.tray_icon:
-            self.tray_icon.stop()
 
         # 5. 关闭单实例锁
         if self._lock_socket:
@@ -211,7 +243,7 @@ class App:
             except Exception:
                 pass
 
-        # 6. 销毁 UI
+        # 6. 销毁 UI（退出 tkinter 主循环）
         if self.main_window:
             self.main_window.destroy()
 
