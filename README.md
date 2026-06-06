@@ -20,6 +20,12 @@
 - **日志记录** — 运行日志写入 `%USERPROFILE%\.filego\filego.log`
 - **现代 UI** — 基于 ttkbootstrap "flatly" 主题的美观界面
 
+## 预览
+
+![主窗口](./screenshots/main-window.png)
+
+![任务编辑对话框](./screenshots/task-dialog.png)
+
 ## 运行环境
 
 - **操作系统：** Windows
