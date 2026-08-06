@@ -19,12 +19,20 @@ LOG_FILE = DATA_DIR / "filego.log"
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
+# 主题
+THEME_LIGHT = "light"  # 浅色（flatly）
+THEME_DARK = "dark"    # 深色（darkly）
+APP_THEMES = {
+    THEME_LIGHT: "flatly",
+    THEME_DARK: "darkly",
+}
+
 # 默认配置
 DEFAULT_CONFIG = {
     "schema_version": 1,
     "poll_interval_seconds": 15,
+    "theme": THEME_LIGHT,
     "autostart_enabled": False,
-    "minimize_to_tray": False,
     "close_to_tray": True,
     "window_geometry": "950x650+100+100",
     "notify_on_success": False,
@@ -44,6 +52,11 @@ SCHEDULE_DAILY = "daily"        # 每日定时
 SCHEDULE_MANUAL = "manual"      # 仅手动
 
 SCHEDULE_TYPES = [SCHEDULE_INTERVAL, SCHEDULE_DAILY, SCHEDULE_MANUAL]
+
+# 备份模式
+BACKUP_FILE = "file"        # 文件复制（原有行为：单个文件/目录全量替换）
+BACKUP_FOLDER = "folder"    # 文件夹整体备份（同步整个文件夹，新增文件也会被备份）
+BACKUP_MODES = [BACKUP_FILE, BACKUP_FOLDER]
 
 # 任务状态
 STATUS_IDLE = "idle"

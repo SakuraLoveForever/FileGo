@@ -8,9 +8,24 @@ import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 from typing import Optional, List
 
-from config import SCHEDULE_INTERVAL, SCHEDULE_DAILY, SCHEDULE_MANUAL
+from config import (
+    SCHEDULE_INTERVAL,
+    SCHEDULE_DAILY,
+    SCHEDULE_MANUAL,
+    BACKUP_FILE,
+    BACKUP_FOLDER,
+    THEME_LIGHT,
+    THEME_DARK,
+)
 from models.task import Task
 from models.task_group import TaskGroup
+
+
+BACKUP_MODE_LABELS = {
+    BACKUP_FILE: "文件复制",
+    BACKUP_FOLDER: "整体备份(文件夹)",
+}
+BACKUP_MODE_VALUES = {v: k for k, v in BACKUP_MODE_LABELS.items()}
 
 
 class PathListEditor(ttk.Labelframe):
@@ -33,8 +48,9 @@ class PathListEditor(ttk.Labelframe):
             self._add_row("")
 
         # 添加按钮
-        ttk.Button(self, text=f"＋ 添加{title}", bootstyle="success-outline",
-                   command=lambda: self._add_row("")).pack(anchor=W, pady=(8, 0))
+        self._add_btn = ttk.Button(self, text=f"＋ 添加{title}", bootstyle="success-outline",
+                                   command=lambda: self._add_row(""))
+        self._add_btn.pack(anchor=W, pady=(8, 0))
 
     def _add_row(self, value: str):
         var = tk.StringVar(value=value)
@@ -63,6 +79,15 @@ class PathListEditor(ttk.Labelframe):
         row.destroy()
         self._rows.remove(row)
         self._renumber()
+
+    def set_browse_dir(self, value: bool):
+        """切换浏览按钮：True 时只选文件夹，False 时先选文件。"""
+        self._browse_dir = value
+
+    def set_title(self, title: str):
+        """更新面板标题及"添加"按钮文字。"""
+        self.configure(text=title)
+        self._add_btn.configure(text=f"＋ 添加{title}")
 
     def _renumber(self):
         for i, row in enumerate(self._rows):
@@ -100,6 +125,11 @@ class TaskEditDialog(tk.Toplevel):
         self._name_var = tk.StringVar(value=task.name if task else "")
         self._enabled_var = tk.BooleanVar(value=task.enabled if task else True)
         self._type_var = tk.StringVar(value=task.schedule_type if task else SCHEDULE_INTERVAL)
+        self._mode_var = tk.StringVar(value=task.backup_mode if task else BACKUP_FILE)
+        self._mode_display_var = tk.StringVar(
+            value=BACKUP_MODE_LABELS.get(self._mode_var.get(), BACKUP_MODE_LABELS[BACKUP_FILE])
+        )
+        self._note_var = tk.StringVar()
 
         # 解析 HH:MM 为分离的小时/分钟
         if task and task.schedule_type == SCHEDULE_DAILY:
@@ -126,6 +156,7 @@ class TaskEditDialog(tk.Toplevel):
 
         self._build(task)
         self._on_type_change()
+        self._on_mode_change()
 
         self.update_idletasks()
         self._center()
@@ -150,6 +181,18 @@ class TaskEditDialog(tk.Toplevel):
         ttk.Label(outer, text="任务名称", font=("", 9, "bold"), bootstyle="primary").pack(anchor=W)
         ttk.Entry(outer, textvariable=self._name_var,
                   font=("", 10), width=40).pack(fill=X, pady=(3, 12))
+
+        # ── 备份模式 ──
+        mode_row = ttk.Frame(outer)
+        mode_row.pack(fill=X, pady=(0, 12))
+        ttk.Label(mode_row, text="备份模式", font=("", 9, "bold"),
+                  bootstyle="primary").pack(side=LEFT)
+        mode_box = ttk.Combobox(mode_row, textvariable=self._mode_display_var,
+                                width=20, state="readonly",
+                                values=list(BACKUP_MODE_LABELS.values()),
+                                bootstyle="primary")
+        mode_box.pack(side=LEFT, padx=(10, 5))
+        mode_box.bind("<<ComboboxSelected>>", lambda e: self._on_mode_change())
 
         # ── 源路径 + 目标路径 并排 ──
         columns = ttk.Frame(outer)
@@ -181,7 +224,7 @@ class TaskEditDialog(tk.Toplevel):
         self._dst_editor.pack(fill=X)
 
         # ── 说明 ──
-        ttk.Label(outer, text="每个源路径都会分别复制到所有目标路径",
+        ttk.Label(outer, textvariable=self._note_var,
                   bootstyle="secondary", font=("", 8, "italic")).pack(pady=(5, 10))
 
         ttk.Separator(outer, bootstyle="default").pack(fill=X, pady=5)
@@ -260,6 +303,21 @@ class TaskEditDialog(tk.Toplevel):
         else:
             self._manual_box.pack(side=LEFT)
 
+    def _on_mode_change(self):
+        """切换备份模式：整体备份时源/目标均按文件夹选择并更新说明。"""
+        self._mode_var.set(BACKUP_MODE_VALUES.get(self._mode_display_var.get(), BACKUP_FILE))
+        folder_mode = self._mode_var.get() == BACKUP_FOLDER
+        self._src_editor.set_browse_dir(folder_mode)
+        self._src_editor.set_title("📁 源文件夹" if folder_mode else "📄 源路径")
+        self._dst_editor.set_title("📁 目标文件夹" if folder_mode else "📁 目标路径")
+        if folder_mode:
+            self._note_var.set(
+                "每个源文件夹的整个内容会同步到每个目标文件夹；"
+                "之后新增的文件也会自动备份，目标中已有文件不会被删除。"
+            )
+        else:
+            self._note_var.set("每个源路径都会分别复制到所有目标路径。")
+
     def _on_save(self):
         # 根据类型获取调度值
         st = self._type_var.get()
@@ -281,6 +339,7 @@ class TaskEditDialog(tk.Toplevel):
             enabled=self._enabled_var.get(),
             schedule_type=st,
             schedule_value=schedule_value,
+            backup_mode=self._mode_var.get(),
             last_run=self._editing.last_run if self._editing else None,
             last_status=self._editing.last_status if self._editing else "idle",
             next_run=self._editing.next_run if self._editing else None,
@@ -359,8 +418,8 @@ class SettingsDialog(tk.Toplevel):
         self._on_save = on_save
 
         self._poll_var = tk.IntVar(value=config.get("poll_interval_seconds", 15))
+        self._theme_var = tk.StringVar(value=config.get("theme", THEME_LIGHT))
         self._close_tray_var = tk.BooleanVar(value=config.get("close_to_tray", True))
-        self._minimize_tray_var = tk.BooleanVar(value=config.get("minimize_to_tray", False))
         self._notify_success_var = tk.BooleanVar(value=config.get("notify_on_success", False))
         self._notify_failure_var = tk.BooleanVar(value=config.get("notify_on_failure", True))
 
@@ -396,14 +455,21 @@ class SettingsDialog(tk.Toplevel):
 
         ttk.Separator(frame, bootstyle="default").pack(fill=X, pady=5)
 
+        ttk.Label(frame, text="外观", font=("", 10, "bold"), bootstyle="primary").pack(anchor=W)
+        tf = ttk.Frame(frame)
+        tf.pack(fill=X, pady=(5, 10))
+        ttk.Radiobutton(tf, text="浅色", value=THEME_LIGHT, variable=self._theme_var,
+                        bootstyle="primary").pack(side=LEFT, padx=(0, 15))
+        ttk.Radiobutton(tf, text="深色", value=THEME_DARK, variable=self._theme_var,
+                        bootstyle="primary").pack(side=LEFT)
+
+        ttk.Separator(frame, bootstyle="default").pack(fill=X, pady=5)
+
         ttk.Label(frame, text="行为", font=("", 10, "bold"), bootstyle="primary").pack(anchor=W)
         opts = ttk.Frame(frame)
         opts.pack(fill=X, pady=(5, 10))
         ttk.Checkbutton(opts, text="关闭窗口时最小化到系统托盘",
                         variable=self._close_tray_var,
-                        bootstyle="primary-round-toggle").pack(anchor=W, pady=2)
-        ttk.Checkbutton(opts, text="启动时最小化到系统托盘",
-                        variable=self._minimize_tray_var,
                         bootstyle="primary-round-toggle").pack(anchor=W, pady=2)
         ttk.Checkbutton(opts, text="开机自启动（随 Windows 启动）",
                         variable=self._autostart_var,
@@ -430,8 +496,8 @@ class SettingsDialog(tk.Toplevel):
 
     def _on_save_clicked(self):
         self._config["poll_interval_seconds"] = self._poll_var.get()
+        self._config["theme"] = self._theme_var.get()
         self._config["close_to_tray"] = self._close_tray_var.get()
-        self._config["minimize_to_tray"] = self._minimize_tray_var.get()
         self._config["notify_on_success"] = self._notify_success_var.get()
         self._config["notify_on_failure"] = self._notify_failure_var.get()
         self._config["autostart_enabled"] = self._autostart_var.get()

@@ -8,7 +8,7 @@ import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 from typing import List
 
-from config import logger, APP_NAME, APP_VERSION
+from config import logger, APP_NAME, APP_VERSION, APP_THEMES, THEME_LIGHT
 from models.task import Task
 from models.task_group import TaskGroup
 from ui.group_panel import GroupPanel
@@ -30,7 +30,7 @@ class MainWindow:
         # 使用 ttkbootstrap Window（带现代主题）
         self.root = ttk.Window(
             title=f"{APP_NAME} v{APP_VERSION}",
-            themename="flatly",  # 现代扁平主题
+            themename=self._theme_name(),  # 按配置选择浅色/深色主题
             size=(1050, 720),
             iconphoto=None,
         )
@@ -64,6 +64,16 @@ class MainWindow:
         x = (sw - w) // 2
         y = (sh - h) // 2
         self.root.geometry(f"{w}x{h}+{x}+{y}")
+
+    def _theme_name(self) -> str:
+        """根据配置返回 ttkbootstrap 主题名。"""
+        mode = self.app.config.get("theme", THEME_LIGHT)
+        return APP_THEMES.get(mode, APP_THEMES[THEME_LIGHT])
+
+    def _apply_theme(self):
+        """即时切换浅色/深色主题并重建面板（让背景色等跟随主题）。"""
+        self.root.style.theme_use(self._theme_name())
+        self.refresh_all()
 
     def _build(self):
         """构建主窗口 UI。"""
@@ -384,8 +394,11 @@ class MainWindow:
 
     def _on_settings(self):
         def on_save(config):
+            theme_changed = self.app.config.get("theme") != config.get("theme")
             self.app.config.update(config)
             self.app.save_config()
+            if theme_changed:
+                self._apply_theme()
             self._set_status("设置已保存")
 
         SettingsDialog(self.root, self.app.config, on_save)
@@ -450,9 +463,9 @@ class MainWindow:
                     messagebox.showwarning("FileGo — 数据恢复通知", msg)
             self.root.after(500, _show_recovery)
 
-        if start_hidden or (self.app.config.get("minimize_to_tray", False) and HAS_TRAY):
+        if start_hidden:
             self.root.withdraw()
-            self.app.show_tray()  # 窗口启动隐藏 → 显示托盘图标
+            self.app.show_tray()  # 仅 --hidden 启动时隐藏到托盘（如开机自启场景）
         else:
             self.root.deiconify()
         self.root.mainloop()

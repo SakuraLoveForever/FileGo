@@ -96,6 +96,54 @@ def _count_files(path: str) -> int:
     return 0
 
 
+def _file_unchanged(src: str, dst: str) -> bool:
+    """目标文件已存在且大小与修改时间一致时视为未变化，可跳过复制。"""
+    try:
+        ss = os.stat(src)
+        ds = os.stat(dst)
+        return ds.st_size == ss.st_size and abs(ds.st_mtime - ss.st_mtime) < 0.01
+    except OSError:
+        return False
+
+
+def _sync_dir(src_dir: str, dst_dir: str) -> tuple:
+    """
+    把源目录整棵树同步到目标目录（非破坏性合并）：
+    - 新增/变更的文件会被复制；
+    - 目标中已有的其他内容保留，不删除。
+    返回 (已复制数, 失败数, 错误列表)。
+    """
+    copied = 0
+    failed = 0
+    errors = []
+    try:
+        os.makedirs(dst_dir, exist_ok=True)
+    except OSError as e:
+        return 0, 1, [f"无法创建目标目录 {dst_dir}: {e}"]
+
+    for root, dirs, files in os.walk(src_dir):
+        rel = os.path.relpath(root, src_dir)
+        target_root = dst_dir if rel == "." else os.path.join(dst_dir, rel)
+        try:
+            os.makedirs(target_root, exist_ok=True)
+        except OSError as e:
+            failed += 1
+            errors.append(f"{rel or '.':<30} {e}")
+            continue
+        for name in files:
+            s = os.path.join(root, name)
+            d = os.path.join(target_root, name)
+            try:
+                if _file_unchanged(s, d):
+                    continue
+                _copy_with_retry(s, d)
+                copied += 1
+            except OSError as e:
+                failed += 1
+                errors.append(f"{os.path.relpath(s, src_dir)}: {e}")
+    return copied, failed, errors
+
+
 def copy_single(src: str, dst: str) -> CopyResult:
     """复制单个源到目标。"""
     if not src.strip():
@@ -180,6 +228,58 @@ def copy_single(src: str, dst: str) -> CopyResult:
     return CopyResult(success=True, message=f"{copied} 个文件", files_copied=copied)
 
 
+def copy_folder_single(src: str, dst: str) -> CopyResult:
+    """
+    文件夹整体备份：把源文件夹的整个内容同步到目标文件夹。
+    新增的文件会在下一次运行时一并备份；目标中已有的文件保留。
+    """
+    if not src.strip():
+        return CopyResult(success=False, message="源路径为空")
+    if not dst.strip():
+        return CopyResult(success=False, message="目标路径为空")
+
+    src = os.path.expandvars(src)
+    dst = os.path.expandvars(dst)
+    dst_is_dir = _is_directory_path(dst)
+
+    try:
+        if not os.path.exists(src):
+            return CopyResult(success=False, message=f"源不存在: {os.path.basename(src)}")
+
+        if os.path.isdir(src):
+            if os.path.exists(dst) and not dst_is_dir:
+                return CopyResult(success=False, message=f"目标非目录: {dst}")
+            copied, failed, errors = _sync_dir(src, dst)
+        else:
+            # 源是单个文件时直接放入目标文件夹（宽容处理）
+            if not dst_is_dir:
+                return CopyResult(success=False, message=f"整体备份目标必须是文件夹: {dst}")
+            _ensure_dir(dst)
+            dest_path = os.path.join(dst, os.path.basename(src))
+            copied = 0
+            failed = 0
+            errors = []
+            try:
+                if not _file_unchanged(src, dest_path):
+                    _copy_with_retry(src, dest_path)
+                    copied = 1
+            except OSError as e:
+                failed = 1
+                errors.append(f"{os.path.basename(src)}: {e}")
+
+    except Exception as e:
+        logger.exception(f"整体备份异常: {src}")
+        return CopyResult(success=False, message=f"异常: {e}")
+
+    if failed > 0:
+        msg = f"整体备份: {copied} 复制, {failed} 失败"
+        if errors:
+            msg += f" ({'; '.join(errors[:2])})"
+        return CopyResult(success=False, message=msg, files_copied=copied, files_failed=failed)
+
+    return CopyResult(success=True, message=f"整体备份完成: {copied} 个文件", files_copied=copied)
+
+
 def copy_all(sources: List[str], dests: List[str]) -> CopyResult:
     """
     每个源复制到每个目标（M × N 全量复制）。
@@ -218,6 +318,61 @@ def copy_all(sources: List[str], dests: List[str]) -> CopyResult:
         return CopyResult(
             success=True,
             message=f"全部成功: {total_copied} 个文件 ({total_pairs} 组复制)",
+            files_copied=total_copied,
+        )
+    elif total_copied > 0:
+        return CopyResult(
+            success=False,
+            message=f"{total_copied} 成功, {total_failed} 失败 — {'; '.join(pair_errors[:3])}",
+            files_copied=total_copied,
+            files_failed=total_failed,
+        )
+    else:
+        return CopyResult(
+            success=False,
+            message=f"全部失败 ({total_pairs} 组) — {'; '.join(pair_errors[:3])}",
+            files_failed=total_failed,
+        )
+
+
+def copy_folder_all(sources: List[str], dests: List[str]) -> CopyResult:
+    """
+    每个源文件夹整体备份到每个目标文件夹（M×N）。
+    返回汇总结果。
+    """
+    if sources is None:
+        sources = []
+    if dests is None:
+        dests = []
+
+    valid_sources = [s.strip() for s in sources if isinstance(s, str) and s.strip()]
+    valid_dests = [d.strip() for d in dests if isinstance(d, str) and d.strip()]
+
+    if not valid_sources:
+        return CopyResult(success=False, message="无有效源路径")
+    if not valid_dests:
+        return CopyResult(success=False, message="无有效目标路径")
+
+    total_copied = 0
+    total_failed = 0
+    pair_errors = []
+
+    for src in valid_sources:
+        for dst in valid_dests:
+            r = copy_folder_single(src, dst)
+            total_copied += r.files_copied
+            total_failed += r.files_failed
+            if not r.success:
+                src_name = os.path.basename(src)
+                dst_name = os.path.basename(dst) if not _is_directory_path(dst) else dst
+                pair_errors.append(f"{src_name}→{dst_name}: {r.message}")
+
+    total_pairs = len(valid_sources) * len(valid_dests)
+
+    if total_failed == 0 and len(pair_errors) == 0:
+        return CopyResult(
+            success=True,
+            message=f"全部成功: {total_copied} 个文件 ({total_pairs} 组备份)",
             files_copied=total_copied,
         )
     elif total_copied > 0:

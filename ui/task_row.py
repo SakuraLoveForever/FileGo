@@ -7,7 +7,14 @@ from tkinter import messagebox
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 
-from config import SCHEDULE_INTERVAL, SCHEDULE_DAILY, SCHEDULE_MANUAL, STATUS_RUNNING, STATUS_SUCCESS
+from config import (
+    SCHEDULE_INTERVAL,
+    SCHEDULE_DAILY,
+    SCHEDULE_MANUAL,
+    STATUS_RUNNING,
+    STATUS_SUCCESS,
+    BACKUP_FOLDER,
+)
 from models.task import Task
 
 
@@ -82,6 +89,10 @@ class TaskRow(ttk.Frame):
         else:
             sched_text = "👆 仅手动"
 
+        if self.task.backup_mode == BACKUP_FOLDER:
+            ttk.Label(info, text="📁 整体备份", bootstyle="info", font=("", 8)).pack(
+                side=LEFT, padx=(22, 5))
+
         ttk.Label(info, text=sched_text, bootstyle="secondary", font=("", 8)).pack(
             side=LEFT, padx=(22, 15))
 
@@ -117,7 +128,8 @@ class TaskRow(ttk.Frame):
         if sc == 1 and dc == 1 and srcs:
             s = srcs[0] if srcs[0] else ""
             src = s if len(s) <= 30 else "..." + s[-27:]
-            self._pair_info_var.set(f"📄 {src}")
+            icon = "📁" if task.backup_mode == BACKUP_FOLDER else "📄"
+            self._pair_info_var.set(f"{icon} {src}")
         elif sc == 0 or dc == 0:
             self._pair_info_var.set("未配置")
         else:
