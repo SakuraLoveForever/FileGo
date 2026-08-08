@@ -425,6 +425,9 @@ class SettingsDialog(tk.Toplevel):
 
         from services.autostart import is_enabled as check_autostart
         self._autostart_var = tk.BooleanVar(value=check_autostart())
+        self._autostart_minimized_var = tk.BooleanVar(
+            value=config.get("autostart_minimized", True)
+        )
 
         self._build()
         self._center()
@@ -474,6 +477,22 @@ class SettingsDialog(tk.Toplevel):
         ttk.Checkbutton(opts, text="开机自启动（随 Windows 启动）",
                         variable=self._autostart_var,
                         bootstyle="primary-round-toggle").pack(anchor=W, pady=2)
+        # 自启动时最小化到托盘（仅自启动开启时可选）
+        self._autostart_minimized_cb = ttk.Checkbutton(
+            opts, text="    自启动时最小化到系统托盘",
+            variable=self._autostart_minimized_var,
+            bootstyle="primary-round-toggle",
+        )
+        self._autostart_minimized_cb.pack(anchor=W, pady=2)
+        self._autostart_minimized_cb.configure(
+            state=tk.NORMAL if self._autostart_var.get() else tk.DISABLED
+        )
+        self._autostart_var.trace_add(
+            "write",
+            lambda *a: self._autostart_minimized_cb.configure(
+                state=tk.NORMAL if self._autostart_var.get() else tk.DISABLED
+            ),
+        )
 
         ttk.Separator(frame, bootstyle="default").pack(fill=X, pady=5)
 
@@ -501,11 +520,12 @@ class SettingsDialog(tk.Toplevel):
         self._config["notify_on_success"] = self._notify_success_var.get()
         self._config["notify_on_failure"] = self._notify_failure_var.get()
         self._config["autostart_enabled"] = self._autostart_var.get()
+        self._config["autostart_minimized"] = self._autostart_minimized_var.get()
 
         from services.autostart import enable as enable_autostart, disable as disable_autostart
         try:
             if self._autostart_var.get():
-                enable_autostart()
+                enable_autostart(minimized=self._autostart_minimized_var.get())
             else:
                 disable_autostart()
         except OSError as e:

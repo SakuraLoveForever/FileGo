@@ -10,11 +10,15 @@ from config import logger, APP_NAME
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
-def _get_app_path() -> str:
-    """获取当前应用程序的路径用于注册表。"""
+def _get_app_path(minimized: bool) -> str:
+    """获取当前应用程序的路径用于注册表。
+
+    minimized=True 时追加 --hidden 参数，使自启动启动后最小化到系统托盘。
+    """
+    args = " --hidden" if minimized else ""
     if getattr(sys, "frozen", False):
         # PyInstaller 打包的 exe
-        return sys.executable
+        return f'"{sys.executable}"{args}'
     else:
         # 开发模式 — 使用 pythonw.exe 运行 main.py
         import os
@@ -23,7 +27,7 @@ def _get_app_path() -> str:
             pythonw = sys.executable  # 回退到 python.exe
         main_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "main.py")
         main_py = os.path.abspath(main_py)
-        return f'"{pythonw}" "{main_py}" --hidden'
+        return f'"{pythonw}" "{main_py}"{args}'
 
 
 def is_enabled() -> bool:
@@ -40,10 +44,13 @@ def is_enabled() -> bool:
         return False
 
 
-def enable() -> None:
-    """启用自启动。"""
+def enable(minimized: bool = True) -> None:
+    """启用自启动。
+
+    minimized=True 时自启动后最小化到系统托盘（--hidden）。
+    """
     try:
-        app_path = _get_app_path()
+        app_path = _get_app_path(minimized)
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_WRITE)
         winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, app_path)
         winreg.CloseKey(key)

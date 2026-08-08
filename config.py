@@ -33,6 +33,7 @@ DEFAULT_CONFIG = {
     "poll_interval_seconds": 15,
     "theme": THEME_LIGHT,
     "autostart_enabled": False,
+    "autostart_minimized": True,  # 开机自启动时最小化到系统托盘
     "close_to_tray": True,
     "window_geometry": "950x650+100+100",
     "notify_on_success": False,
