@@ -420,6 +420,7 @@ class SettingsDialog(tk.Toplevel):
         self._poll_var = tk.IntVar(value=config.get("poll_interval_seconds", 15))
         self._theme_var = tk.StringVar(value=config.get("theme", THEME_LIGHT))
         self._close_tray_var = tk.BooleanVar(value=config.get("close_to_tray", True))
+        self._start_minimized_var = tk.BooleanVar(value=config.get("start_minimized", False))
         self._notify_success_var = tk.BooleanVar(value=config.get("notify_on_success", False))
         self._notify_failure_var = tk.BooleanVar(value=config.get("notify_on_failure", True))
 
@@ -474,6 +475,9 @@ class SettingsDialog(tk.Toplevel):
         ttk.Checkbutton(opts, text="关闭窗口时最小化到系统托盘",
                         variable=self._close_tray_var,
                         bootstyle="primary-round-toggle").pack(anchor=W, pady=2)
+        ttk.Checkbutton(opts, text="启动时最小化到系统托盘",
+                        variable=self._start_minimized_var,
+                        bootstyle="primary-round-toggle").pack(anchor=W, pady=2)
         ttk.Checkbutton(opts, text="开机自启动（随 Windows 启动）",
                         variable=self._autostart_var,
                         bootstyle="primary-round-toggle").pack(anchor=W, pady=2)
@@ -517,6 +521,7 @@ class SettingsDialog(tk.Toplevel):
         self._config["poll_interval_seconds"] = self._poll_var.get()
         self._config["theme"] = self._theme_var.get()
         self._config["close_to_tray"] = self._close_tray_var.get()
+        self._config["start_minimized"] = self._start_minimized_var.get()
         self._config["notify_on_success"] = self._notify_success_var.get()
         self._config["notify_on_failure"] = self._notify_failure_var.get()
         self._config["autostart_enabled"] = self._autostart_var.get()

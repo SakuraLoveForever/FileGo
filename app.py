@@ -86,7 +86,9 @@ class App:
 
     def run(self, start_hidden: bool = False):
         """启动应用程序。"""
-        logger.info("FileGo 启动中...")
+        # 设置: 启动时最小化到系统托盘（与 --hidden 参数叠加）
+        start_hidden = start_hidden or self.config.get("start_minimized", False)
+        logger.info("FileGo 启动中..." + ("（最小化到托盘）" if start_hidden else ""))
 
         # 创建执行器
         self.executor = Executor(on_result=self._on_task_result)
