@@ -7,10 +7,10 @@ import threading
 import traceback
 from typing import Callable
 
-from config import logger, STATUS_RUNNING, BACKUP_FOLDER
+from config import logger, STATUS_RUNNING
 from models.task import Task
 from models.task_group import TaskGroup
-from services.file_copy import copy_all, copy_folder_all
+from services.file_copy import copy_all
 
 
 class Executor(threading.Thread):
@@ -55,10 +55,7 @@ class Executor(threading.Thread):
         logger.info(f"执行: [{task.name}] {len(task.sources)}源×{len(task.dests)}目标 = {combos}次复制")
         self._on_result(task, group, True, STATUS_RUNNING)
 
-        if task.backup_mode == BACKUP_FOLDER:
-            result = copy_folder_all(task.sources, task.dests)
-        else:
-            result = copy_all(task.sources, task.dests)
+        result = copy_all(task.sources, task.dests, task.source_modes)
 
         if result.success:
             logger.info(f"成功: {(task.task_id or "?")[:8]} — {result.message}")

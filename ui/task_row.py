@@ -89,8 +89,8 @@ class TaskRow(ttk.Frame):
         else:
             sched_text = "👆 仅手动"
 
-        if self.task.backup_mode == BACKUP_FOLDER:
-            ttk.Label(info, text="📁 整体备份", bootstyle="info", font=("", 8)).pack(
+        if BACKUP_FOLDER in self.task.source_modes:
+            ttk.Label(info, text=self.task.mode_label, bootstyle="info", font=("", 8)).pack(
                 side=LEFT, padx=(22, 5))
 
         ttk.Label(info, text=sched_text, bootstyle="secondary", font=("", 8)).pack(
@@ -126,9 +126,10 @@ class TaskRow(ttk.Frame):
         sc = len([s for s in srcs if isinstance(s, str) and s.strip()])
         dc = len([d for d in dsts if isinstance(d, str) and d.strip()])
         if sc == 1 and dc == 1 and srcs:
-            s = srcs[0] if srcs[0] else ""
+            s = next(s for s in srcs if s.strip())
             src = s if len(s) <= 30 else "..." + s[-27:]
-            icon = "📁" if task.backup_mode == BACKUP_FOLDER else "📄"
+            mode = next(mode for source, mode in zip(srcs, task.source_modes) if source.strip())
+            icon = "📁" if mode == BACKUP_FOLDER else "📄"
             self._pair_info_var.set(f"{icon} {src}")
         elif sc == 0 or dc == 0:
             self._pair_info_var.set("未配置")

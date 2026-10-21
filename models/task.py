@@ -20,7 +20,7 @@ from config import (
 
 @dataclass
 class Task:
-    """文件复制任务 — sources 中每个路径都复制到 dests 中每个路径。"""
+    """每条源路径按 source_modes 指定的类型复制到所有目标。"""
     name: str = "新任务"
     sources: List[str] = field(default_factory=lambda: [""])
     dests: List[str] = field(default_factory=lambda: [""])
@@ -32,6 +32,7 @@ class Task:
     last_run: Optional[str] = None
     last_status: str = "idle"
     next_run: Optional[str] = None
+    source_modes: List[str] = field(default_factory=list)
 
     def __post_init__(self):
         """确保 sources 和 dests 始终是列表。"""
@@ -45,11 +46,19 @@ class Task:
         # 过滤 None 值
         self.sources = [s if isinstance(s, str) else "" for s in self.sources]
         self.dests = [d if isinstance(d, str) else "" for d in self.dests]
+        modes = self.source_modes or []
+        self.source_modes = [
+            modes[i] if i < len(modes) else self.backup_mode
+            for i in range(len(self.sources))
+        ]
 
     @property
     def mode_label(self) -> str:
         """备份模式的中文标签。"""
-        return "整体备份(文件夹)" if self.backup_mode == BACKUP_FOLDER else "文件复制"
+        modes = {mode for source, mode in zip(self.sources, self.source_modes) if source.strip()}
+        if len(modes) > 1:
+            return "混合复制"
+        return "整体备份(文件夹)" if modes == {BACKUP_FOLDER} else "文件复制"
 
     @property
     def total_combinations(self) -> int:
@@ -81,6 +90,7 @@ class Task:
             schedule_type=d.get("schedule_type", SCHEDULE_INTERVAL),
             schedule_value=d.get("schedule_value", "60"),
             backup_mode=d.get("backup_mode", BACKUP_FILE),
+            source_modes=d.get("source_modes", []),
             last_run=d.get("last_run"),
             last_status=d.get("last_status", "idle"),
             next_run=d.get("next_run"),
@@ -96,6 +106,7 @@ class Task:
             "schedule_type": self.schedule_type,
             "schedule_value": self.schedule_value,
             "backup_mode": self.backup_mode,
+            "source_modes": self.source_modes,
             "last_run": self.last_run,
             "last_status": self.last_status,
             "next_run": self.next_run,
@@ -125,6 +136,11 @@ class Task:
             errors.append(f"无效的调度类型: {self.schedule_type}")
         if self.backup_mode not in BACKUP_MODES:
             errors.append(f"无效的备份模式: {self.backup_mode}")
+        if len(self.source_modes) != len(self.sources):
+            errors.append("源路径与复制类型数量不一致")
+        for i, mode in enumerate(self.source_modes):
+            if mode not in BACKUP_MODES:
+                errors.append(f"源 #{i+1} 的复制类型无效: {mode}")
         if self.schedule_type == SCHEDULE_INTERVAL:
             try:
                 val = int(self.schedule_value)

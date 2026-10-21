@@ -5,11 +5,12 @@
 import glob
 import os
 import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List
 
-from config import logger
+from config import logger, BACKUP_FILE, BACKUP_FOLDER
 
 
 @dataclass
@@ -39,50 +40,62 @@ def _is_directory_path(path: str) -> bool:
 
 
 def _ensure_dir(path: str):
-    """安全创建目录：如果路径是已存在的文件则先删除。"""
-    import time
-    if os.path.isfile(path):
-        try:
-            os.remove(path)
-            time.sleep(0.1)
-        except OSError:
-            pass
+    """创建目录；遇到同名文件时保留文件并报错。"""
     os.makedirs(path, exist_ok=True)
-    time.sleep(0.05)  # Windows 目录创建后短暂等待
+
+
+def _same_file(src: str, dst: str) -> bool:
+    """识别同一路径及指向同一文件的硬链接、符号链接。"""
+    try:
+        return os.path.samefile(src, dst)
+    except OSError:
+        return os.path.normcase(os.path.realpath(src)) == os.path.normcase(os.path.realpath(dst))
+
+
+def _directories_overlap(src: str, dst: str) -> bool:
+    src = os.path.normcase(os.path.realpath(src))
+    dst = os.path.normcase(os.path.realpath(dst))
+    try:
+        return os.path.commonpath([src, dst]) in (src, dst)
+    except ValueError:  # 不同盘符
+        return False
 
 
 def _copy_with_retry(src: str, dst: str, retries: int = 3) -> None:
-    """手动读写文件复制，避免 shutil.copy2 元数据复制触发 Windows 文件锁。"""
+    """写入同目录临时文件，成功后替换目标；失败时保留原有内容。"""
     import time
+    if _same_file(src, dst):
+        return
     last_err = None
     for attempt in range(retries):
+        temp_path = None
         try:
-            # 手动分块复制，不复制元数据
-            with open(src, "rb") as fsrc:
-                with open(dst, "wb") as fdst:
-                    while True:
-                        chunk = fsrc.read(8 * 1024 * 1024)  # 8MB 块
-                        if not chunk:
-                            break
-                        fdst.write(chunk)
+            with open(src, "rb") as fsrc, tempfile.NamedTemporaryFile(
+                dir=os.path.dirname(os.path.abspath(dst)), prefix=".filego-", suffix=".tmp",
+                delete=False,
+            ) as fdst:
+                temp_path = fdst.name
+                shutil.copyfileobj(fsrc, fdst, length=8 * 1024 * 1024)
             # 尝试复制修改时间（失败不影响）
             try:
                 st = os.stat(src)
-                os.utime(dst, (st.st_atime, st.st_mtime))
+                os.utime(temp_path, (st.st_atime, st.st_mtime))
             except OSError:
                 pass
+            os.replace(temp_path, dst)
             return
         except OSError as e:
             last_err = e
             if attempt < retries - 1:
                 time.sleep(0.5 * (attempt + 1))
-            else:
-                # 最后一次尝试：清理可能损坏的目标文件
+        finally:
+            if temp_path is not None:
                 try:
-                    if os.path.exists(dst):
-                        os.remove(dst)
-                except OSError:
+                    os.unlink(temp_path)
+                except FileNotFoundError:
                     pass
+                except OSError as e:
+                    logger.warning(f"临时文件清理失败: {temp_path}: {e}")
     raise last_err
 
 
@@ -97,11 +110,19 @@ def _count_files(path: str) -> int:
 
 
 def _file_unchanged(src: str, dst: str) -> bool:
-    """目标文件已存在且大小与修改时间一致时视为未变化，可跳过复制。"""
+    """只有实际内容相同才跳过，不能仅凭大小和修改时间判断。"""
     try:
-        ss = os.stat(src)
-        ds = os.stat(dst)
-        return ds.st_size == ss.st_size and abs(ds.st_mtime - ss.st_mtime) < 0.01
+        if _same_file(src, dst):
+            return True
+        if os.path.getsize(src) != os.path.getsize(dst):
+            return False
+        with open(src, "rb") as source, open(dst, "rb") as dest:
+            while True:
+                chunk = source.read(8 * 1024 * 1024)
+                if chunk != dest.read(8 * 1024 * 1024):
+                    return False
+                if not chunk:
+                    return True
     except OSError:
         return False
 
@@ -113,6 +134,10 @@ def _sync_dir(src_dir: str, dst_dir: str) -> tuple:
     - 目标中已有的其他内容保留，不删除。
     返回 (已复制数, 失败数, 错误列表)。
     """
+    if _same_file(src_dir, dst_dir):
+        return 0, 0, []
+    if _directories_overlap(src_dir, dst_dir):
+        return 0, 1, ["源目录与目标目录不能互相包含"]
     copied = 0
     failed = 0
     errors = []
@@ -169,8 +194,10 @@ def copy_single(src: str, dst: str) -> CopyResult:
                 if os.path.isfile(match):
                     try:
                         dest_path = os.path.join(dst, os.path.basename(match)) if dst_is_dir else dst
+                        if _same_file(match, dest_path):
+                            continue
                         _ensure_dir(os.path.dirname(dest_path) or ".")
-                        shutil.copy2(match, dest_path)
+                        _copy_with_retry(match, dest_path)
                         copied += 1
                     except (PermissionError, OSError) as e:
                         failed += 1
@@ -183,6 +210,10 @@ def copy_single(src: str, dst: str) -> CopyResult:
                 if os.path.exists(dst) and not dst_is_dir:
                     return CopyResult(success=False, message=f"目标非目录: {dst}")
                 dest_dir = os.path.join(dst, os.path.basename(src)) if (os.path.exists(dst) and dst_is_dir) else dst
+                if _same_file(src, dest_dir):
+                    return CopyResult(success=True, message="源与目标为同一目录，已跳过")
+                if _directories_overlap(src, dest_dir):
+                    return CopyResult(success=False, message="源目录与目标目录不能互相包含", files_failed=1)
                 try:
                     if os.path.exists(dest_dir):
                         shutil.rmtree(dest_dir)
@@ -202,12 +233,9 @@ def copy_single(src: str, dst: str) -> CopyResult:
                 else:
                     # 目标是不存在的文件路径 → 直接用
                     dest_path = dst
+                if _same_file(src, dest_path):
+                    return CopyResult(success=True, message="源与目标为同一文件，已跳过")
                 _ensure_dir(os.path.dirname(dest_path) or ".")
-                if os.path.isfile(dest_path):
-                    try:
-                        os.remove(dest_path)
-                    except OSError:
-                        pass
                 try:
                     _copy_with_retry(src, dest_path)
                     copied = 1
@@ -280,9 +308,10 @@ def copy_folder_single(src: str, dst: str) -> CopyResult:
     return CopyResult(success=True, message=f"整体备份完成: {copied} 个文件", files_copied=copied)
 
 
-def copy_all(sources: List[str], dests: List[str]) -> CopyResult:
+def copy_all(sources: List[str], dests: List[str], source_modes: List[str] = None) -> CopyResult:
     """
     每个源复制到每个目标（M × N 全量复制）。
+    source_modes 与 sources 一一对应；省略时沿用文件复制行为。
     返回汇总结果。
     """
     if sources is None:
@@ -290,7 +319,11 @@ def copy_all(sources: List[str], dests: List[str]) -> CopyResult:
     if dests is None:
         dests = []
 
-    valid_sources = [s.strip() for s in sources if isinstance(s, str) and s.strip()]
+    modes = source_modes if source_modes is not None else [BACKUP_FILE] * len(sources)
+    if len(modes) != len(sources) or any(m not in (BACKUP_FILE, BACKUP_FOLDER) for m in modes):
+        return CopyResult(success=False, message="源路径的复制类型无效")
+    valid_sources = [(s.strip(), mode) for s, mode in zip(sources, modes)
+                     if isinstance(s, str) and s.strip()]
     valid_dests = [d.strip() for d in dests if isinstance(d, str) and d.strip()]
 
     if not valid_sources:
@@ -302,11 +335,11 @@ def copy_all(sources: List[str], dests: List[str]) -> CopyResult:
     total_failed = 0
     pair_errors = []
 
-    for src in valid_sources:
+    for src, mode in valid_sources:
         for dst in valid_dests:
-            r = copy_single(src, dst)
+            r = copy_folder_single(src, dst) if mode == BACKUP_FOLDER else copy_single(src, dst)
             total_copied += r.files_copied
-            total_failed += r.files_failed
+            total_failed += r.files_failed if r.success else max(1, r.files_failed)
             if not r.success:
                 src_name = os.path.basename(src)
                 dst_name = os.path.basename(dst) if not _is_directory_path(dst) else dst
@@ -361,7 +394,7 @@ def copy_folder_all(sources: List[str], dests: List[str]) -> CopyResult:
         for dst in valid_dests:
             r = copy_folder_single(src, dst)
             total_copied += r.files_copied
-            total_failed += r.files_failed
+            total_failed += r.files_failed if r.success else max(1, r.files_failed)
             if not r.success:
                 src_name = os.path.basename(src)
                 dst_name = os.path.basename(dst) if not _is_directory_path(dst) else dst

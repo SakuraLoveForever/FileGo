@@ -6,6 +6,11 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
+from ttkbootstrap.utility import scale_size
+try:
+    from ttkbootstrap.widgets.scrolled import ScrolledFrame
+except ImportError:
+    from ttkbootstrap.scrolled import ScrolledFrame
 from typing import Optional, List
 
 from config import (
@@ -22,7 +27,7 @@ from models.task_group import TaskGroup
 
 
 BACKUP_MODE_LABELS = {
-    BACKUP_FILE: "文件复制",
+    BACKUP_FILE: "单文件复制",
     BACKUP_FOLDER: "整体备份(文件夹)",
 }
 BACKUP_MODE_VALUES = {v: k for k, v in BACKUP_MODE_LABELS.items()}
@@ -31,28 +36,32 @@ BACKUP_MODE_VALUES = {v: k for k, v in BACKUP_MODE_LABELS.items()}
 class PathListEditor(ttk.Labelframe):
     """可编辑的路径列表 — 带添加/删除按钮的路径条目集合。"""
 
-    def __init__(self, parent, title: str, paths: List[str], browse_dir: bool = False, **kw):
-        super().__init__(parent, text=title, padding=8, **kw)
+    def __init__(self, parent, title: str, paths: List[str], browse_dir: bool = False,
+                 source_modes: Optional[List[str]] = None, **kw):
+        super().__init__(parent, text=title, padding=6, **kw)
         self._paths: List[tk.StringVar] = []
         self._rows: List[ttk.Frame] = []
         self._browse_dir = browse_dir
+        self._mode_vars = [] if source_modes is not None else None
         self._container = ttk.Frame(self)
         self._container.pack(fill=X)
 
         # 初始化行
-        for p in paths:
-            self._add_row(p)
+        for i, p in enumerate(paths):
+            mode = source_modes[i] if source_modes and i < len(source_modes) else BACKUP_FILE
+            self._add_row(p, mode)
 
         # 如果没有行，至少加一行
         if not self._paths:
             self._add_row("")
 
         # 添加按钮
-        self._add_btn = ttk.Button(self, text=f"＋ 添加{title}", bootstyle="success-outline",
+        self._add_btn = ttk.Button(self, text="＋ 添加路径", bootstyle="success-link",
+                                   padding=(4, 2),
                                    command=lambda: self._add_row(""))
-        self._add_btn.pack(anchor=W, pady=(8, 0))
+        self._add_btn.pack(anchor=W, pady=(3, 0))
 
-    def _add_row(self, value: str):
+    def _add_row(self, value: str, mode: str = BACKUP_FILE):
         var = tk.StringVar(value=value)
         self._paths.append(var)
         idx = len(self._paths) - 1
@@ -62,10 +71,16 @@ class PathListEditor(ttk.Labelframe):
 
         ttk.Label(row, text=f"#{idx + 1}", font=("", 8, "bold"),
                   bootstyle="secondary", width=3).pack(side=LEFT, padx=(0, 5))
-        ttk.Entry(row, textvariable=var, width=50).pack(side=LEFT, fill=X, expand=True, padx=(0, 3))
-        ttk.Button(row, text="📂", width=3, bootstyle="outline-secondary",
-                   command=lambda v=var: self._browse(v)).pack(side=LEFT, padx=(0, 3))
-        ttk.Button(row, text="✕", width=3, bootstyle="danger-outline",
+        mode_var = None
+        if self._mode_vars is not None:
+            mode_var = tk.StringVar(value=BACKUP_MODE_LABELS[mode])
+            self._mode_vars.append(mode_var)
+            ttk.Combobox(row, textvariable=mode_var, width=14, state="readonly",
+                         values=list(BACKUP_MODE_LABELS.values())).pack(side=LEFT, padx=(0, 5))
+        ttk.Entry(row, textvariable=var, width=24).pack(side=LEFT, fill=X, expand=True, padx=(0, 3))
+        ttk.Button(row, text="…", width=2, padding=(4, 2), bootstyle="outline-secondary",
+                   command=lambda v=var, m=mode_var: self._browse(v, m)).pack(side=LEFT, padx=(0, 3))
+        ttk.Button(row, text="×", width=2, padding=(4, 2), bootstyle="danger-link",
                    command=lambda r=row, v=var: self._remove_row(r, v)).pack(side=LEFT)
 
         self._rows.append(row)
@@ -76,18 +91,11 @@ class PathListEditor(ttk.Labelframe):
             return
         idx = self._paths.index(var)
         self._paths.pop(idx)
+        if self._mode_vars is not None:
+            self._mode_vars.pop(idx)
         row.destroy()
         self._rows.remove(row)
         self._renumber()
-
-    def set_browse_dir(self, value: bool):
-        """切换浏览按钮：True 时只选文件夹，False 时先选文件。"""
-        self._browse_dir = value
-
-    def set_title(self, title: str):
-        """更新面板标题及"添加"按钮文字。"""
-        self.configure(text=title)
-        self._add_btn.configure(text=f"＋ 添加{title}")
 
     def _renumber(self):
         for i, row in enumerate(self._rows):
@@ -96,18 +104,21 @@ class PathListEditor(ttk.Labelframe):
                     child.configure(text=f"#{i + 1}")
                     break
 
-    def _browse(self, var: tk.StringVar):
-        if self._browse_dir:
-            path = filedialog.askdirectory(title="选择目录")
+    def _browse(self, var: tk.StringVar, mode_var: Optional[tk.StringVar] = None):
+        folder_mode = (BACKUP_MODE_VALUES[mode_var.get()] == BACKUP_FOLDER
+                       if mode_var is not None else self._browse_dir)
+        if folder_mode:
+            path = filedialog.askdirectory(title="选择目录", parent=self.winfo_toplevel())
         else:
-            path = filedialog.askopenfilename(title="选择文件")
-            if not path:
-                path = filedialog.askdirectory(title="选择目录")
+            path = filedialog.askopenfilename(title="选择文件", parent=self.winfo_toplevel())
         if path:
             var.set(path)
 
     def get_paths(self) -> List[str]:
         return [v.get().strip() for v in self._paths]
+
+    def get_modes(self) -> List[str]:
+        return [BACKUP_MODE_VALUES[v.get()] for v in self._mode_vars]
 
 
 class TaskEditDialog(tk.Toplevel):
@@ -116,7 +127,7 @@ class TaskEditDialog(tk.Toplevel):
     def __init__(self, parent, task: Optional[Task] = None):
         super().__init__(parent)
         self.title("编辑任务" if task else "新建任务")
-        self.resizable(True, False)
+        self.resizable(True, True)
         self.transient(parent)
         self.grab_set()
         self.result: Optional[Task] = None
@@ -125,11 +136,6 @@ class TaskEditDialog(tk.Toplevel):
         self._name_var = tk.StringVar(value=task.name if task else "")
         self._enabled_var = tk.BooleanVar(value=task.enabled if task else True)
         self._type_var = tk.StringVar(value=task.schedule_type if task else SCHEDULE_INTERVAL)
-        self._mode_var = tk.StringVar(value=task.backup_mode if task else BACKUP_FILE)
-        self._mode_display_var = tk.StringVar(
-            value=BACKUP_MODE_LABELS.get(self._mode_var.get(), BACKUP_MODE_LABELS[BACKUP_FILE])
-        )
-        self._note_var = tk.StringVar()
 
         # 解析 HH:MM 为分离的小时/分钟
         if task and task.schedule_type == SCHEDULE_DAILY:
@@ -156,8 +162,10 @@ class TaskEditDialog(tk.Toplevel):
 
         self._build(task)
         self._on_type_change()
-        self._on_mode_change()
 
+        self.update_idletasks()
+        self._body.container.configure(
+            height=min(self._body.winfo_reqheight(), scale_size(self, 450)))
         self.update_idletasks()
         self._center()
         self.wait_window()
@@ -167,56 +175,49 @@ class TaskEditDialog(tk.Toplevel):
         ph = self.master.winfo_height()
         px = self.master.winfo_rootx()
         py = self.master.winfo_rooty()
-        w = self.winfo_reqwidth()
-        h = self.winfo_reqheight()
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        w = min(scale_size(self, 620), sw - 40)
+        h = min(self.winfo_reqheight(), sh - 100)
+        self.minsize(min(scale_size(self, 520), w), min(scale_size(self, 360), h))
+        self.maxsize(sw - 40, sh - 80)
         x = px + (pw - w) // 2
         y = py + (ph - h) // 2
-        self.geometry(f"+{max(0,x)}+{max(0,y)}")
+        self.geometry(f"{w}x{h}+{max(0,min(x,sw-w-20))}+{max(0,min(y,sh-h-60))}")
 
     def _build(self, task: Optional[Task]):
-        outer = ttk.Frame(self, padding=20)
+        shell = ttk.Frame(self, padding=12)
+        shell.pack(fill=BOTH, expand=True)
+        # 操作按钮留在滚动区域外，小屏幕和长路径列表也能随时保存。
+        btns = ttk.Frame(shell)
+        btns.pack(side=BOTTOM, fill=X, pady=(10, 0))
+        outer = ScrolledFrame(shell, autohide=True, padding=(0, 0, scale_size(self, 16), 0),
+                              width=scale_size(self, 580), height=scale_size(self, 450))
+        self._body = outer
         outer.pack(fill=BOTH, expand=True)
 
         # ── 任务名称 ──
-        ttk.Label(outer, text="任务名称", font=("", 9, "bold"), bootstyle="primary").pack(anchor=W)
-        ttk.Entry(outer, textvariable=self._name_var,
-                  font=("", 10), width=40).pack(fill=X, pady=(3, 12))
+        name_row = ttk.Frame(outer)
+        name_row.pack(fill=X, pady=(0, 8))
+        ttk.Label(name_row, text="任务名称", bootstyle="secondary").pack(side=LEFT, padx=(0, 8))
+        ttk.Entry(name_row, textvariable=self._name_var, width=30).pack(side=LEFT, fill=X, expand=True)
+        ttk.Checkbutton(name_row, text="启用", variable=self._enabled_var,
+                        bootstyle="primary-round-toggle").pack(side=RIGHT, padx=(10, 0))
 
-        # ── 备份模式 ──
-        mode_row = ttk.Frame(outer)
-        mode_row.pack(fill=X, pady=(0, 12))
-        ttk.Label(mode_row, text="备份模式", font=("", 9, "bold"),
-                  bootstyle="primary").pack(side=LEFT)
-        mode_box = ttk.Combobox(mode_row, textvariable=self._mode_display_var,
-                                width=20, state="readonly",
-                                values=list(BACKUP_MODE_LABELS.values()),
-                                bootstyle="primary")
-        mode_box.pack(side=LEFT, padx=(10, 5))
-        mode_box.bind("<<ComboboxSelected>>", lambda e: self._on_mode_change())
-
-        # ── 源路径 + 目标路径 并排 ──
+        # ── 源路径与目标路径上下排列，避免并排撑宽窗口 ──
         columns = ttk.Frame(outer)
         columns.pack(fill=X)
 
-        # 左列：源路径
         src_col = ttk.Frame(columns)
-        src_col.pack(side=LEFT, fill=BOTH, expand=True, padx=(0, 5))
+        src_col.pack(fill=X, pady=(0, 8))
 
         src_paths = task.sources if task else [""]
         self._src_editor = PathListEditor(src_col, "📄 源路径", src_paths,
+                                          source_modes=task.source_modes if task else [BACKUP_FILE],
                                           browse_dir=False, bootstyle="default")
         self._src_editor.pack(fill=X)
 
-        # 中间：× 符号
-        mid = ttk.Frame(columns, width=40)
-        mid.pack(side=LEFT, fill=Y)
-        mid.pack_propagate(False)
-        ttk.Label(mid, text="", font=("", 4)).pack()
-        ttk.Label(mid, text="×", font=("", 16, "bold"), bootstyle="info").pack(expand=True)
-
-        # 右列：目标路径
         dst_col = ttk.Frame(columns)
-        dst_col.pack(side=LEFT, fill=BOTH, expand=True, padx=(5, 0))
+        dst_col.pack(fill=X)
 
         dst_paths = task.dests if task else [""]
         self._dst_editor = PathListEditor(dst_col, "📁 目标路径", dst_paths,
@@ -224,25 +225,21 @@ class TaskEditDialog(tk.Toplevel):
         self._dst_editor.pack(fill=X)
 
         # ── 说明 ──
-        ttk.Label(outer, textvariable=self._note_var,
-                  bootstyle="secondary", font=("", 8, "italic")).pack(pady=(5, 10))
-
-        ttk.Separator(outer, bootstyle="default").pack(fill=X, pady=5)
+        ttk.Label(outer, text="所有源 → 所有目标 · 类型逐条设置 · 文件夹备份保留目标已有文件",
+                  wraplength=scale_size(self, 540),
+                  font=("", 8)).pack(anchor=W, pady=(6, 8))
 
         # ── 调度设置 ──
-        sched_frame = ttk.Labelframe(outer, text="调度设置", padding=10, bootstyle="default")
-        sched_frame.pack(fill=X, pady=(5, 10))
+        sched_frame = ttk.Labelframe(outer, text="执行计划", padding=6, bootstyle="default")
+        sched_frame.pack(fill=X)
 
         # 类型选择行
         type_row = ttk.Frame(sched_frame)
         type_row.pack(fill=X)
 
-        ttk.Label(type_row, text="类型:", width=8).pack(side=LEFT)
-        ttk.Combobox(type_row, textvariable=self._type_var, width=12, state="readonly",
+        ttk.Combobox(type_row, textvariable=self._type_var, width=9, state="readonly",
                      values=[SCHEDULE_INTERVAL, SCHEDULE_DAILY, SCHEDULE_MANUAL],
                      bootstyle="primary").pack(side=LEFT, padx=(5, 10))
-
-        ttk.Label(type_row, text="值:", width=3).pack(side=LEFT, padx=(0, 5))
 
         # 动态值容器 — 根据类型切换不同控件
         self._value_frame = ttk.Frame(type_row)
@@ -273,22 +270,18 @@ class TaskEditDialog(tk.Toplevel):
 
         self._type_var.trace_add("write", lambda *a: self._on_type_change())
 
-        ttk.Checkbutton(sched_frame, text="启用此任务",
-                        variable=self._enabled_var,
-                        bootstyle="primary-round-toggle").pack(anchor=W, pady=(8, 0))
-
         # ── 上次状态 ──
         if task and task.last_run:
-            ttk.Separator(outer, bootstyle="default").pack(fill=X, pady=5)
-            info = f"上次运行: {task.last_run[:19].replace('T', ' ')}    状态: {task.last_status}"
-            ttk.Label(outer, text=info, bootstyle="secondary", font=("", 8)).pack(anchor=W)
+            status = ("失败 · 详情见运行日志" if task.last_status.startswith("error") else
+                      "成功" if task.last_status.startswith("success") else
+                      "运行中" if task.last_status == "running" else "空闲")
+            info = f"上次运行 {task.last_run[:19].replace('T', ' ')}  ·  {status}"
+            ttk.Label(outer, text=info, wraplength=scale_size(self, 540),
+                      font=("", 8)).pack(anchor=W, pady=(8, 0))
 
         # ── 按钮 ──
-        ttk.Separator(outer, bootstyle="default").pack(fill=X, pady=10)
-        btns = ttk.Frame(outer)
-        btns.pack(fill=X)
-        ttk.Button(btns, text="取消", bootstyle="secondary", command=self.destroy).pack(side=RIGHT, padx=(5, 0))
-        ttk.Button(btns, text="保存", bootstyle="primary", command=self._on_save).pack(side=RIGHT)
+        ttk.Button(btns, text="保存", width=7, bootstyle="primary", command=self._on_save).pack(side=RIGHT)
+        ttk.Button(btns, text="取消", width=7, bootstyle="secondary-link", command=self.destroy).pack(side=RIGHT, padx=(0, 6))
 
     def _on_type_change(self):
         st = self._type_var.get()
@@ -302,21 +295,6 @@ class TaskEditDialog(tk.Toplevel):
             self._daily_box.pack(side=LEFT)
         else:
             self._manual_box.pack(side=LEFT)
-
-    def _on_mode_change(self):
-        """切换备份模式：整体备份时源/目标均按文件夹选择并更新说明。"""
-        self._mode_var.set(BACKUP_MODE_VALUES.get(self._mode_display_var.get(), BACKUP_FILE))
-        folder_mode = self._mode_var.get() == BACKUP_FOLDER
-        self._src_editor.set_browse_dir(folder_mode)
-        self._src_editor.set_title("📁 源文件夹" if folder_mode else "📄 源路径")
-        self._dst_editor.set_title("📁 目标文件夹" if folder_mode else "📁 目标路径")
-        if folder_mode:
-            self._note_var.set(
-                "每个源文件夹的整个内容会同步到每个目标文件夹；"
-                "之后新增的文件也会自动备份，目标中已有文件不会被删除。"
-            )
-        else:
-            self._note_var.set("每个源路径都会分别复制到所有目标路径。")
 
     def _on_save(self):
         # 根据类型获取调度值
@@ -339,7 +317,8 @@ class TaskEditDialog(tk.Toplevel):
             enabled=self._enabled_var.get(),
             schedule_type=st,
             schedule_value=schedule_value,
-            backup_mode=self._mode_var.get(),
+            backup_mode=self._editing.backup_mode if self._editing else BACKUP_FILE,
+            source_modes=self._src_editor.get_modes(),
             last_run=self._editing.last_run if self._editing else None,
             last_status=self._editing.last_status if self._editing else "idle",
             next_run=self._editing.next_run if self._editing else None,
