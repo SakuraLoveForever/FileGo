@@ -1,5 +1,5 @@
 """
-文件复制服务 — 每个源 → 每个目标全量复制
+文件复制服务 — 源与目标按序号 1 对 1 配对复制
 """
 
 import glob
@@ -310,9 +310,9 @@ def copy_folder_single(src: str, dst: str) -> CopyResult:
 
 def copy_all(sources: List[str], dests: List[str], source_modes: List[str] = None) -> CopyResult:
     """
-    每个源复制到每个目标（M × N 全量复制）。
+    源与目标按序号 1 对 1 配对复制：源 #1 → 目标 #1、源 #2 → 目标 #2。
     source_modes 与 sources 一一对应；省略时沿用文件复制行为。
-    返回汇总结果。
+    两边都留空的空白行会被跳过；数量不一致或某一组只填一边时返回失败。
     """
     if sources is None:
         sources = []
@@ -322,35 +322,47 @@ def copy_all(sources: List[str], dests: List[str], source_modes: List[str] = Non
     modes = source_modes if source_modes is not None else [BACKUP_FILE] * len(sources)
     if len(modes) != len(sources) or any(m not in (BACKUP_FILE, BACKUP_FOLDER) for m in modes):
         return CopyResult(success=False, message="源路径的复制类型无效")
-    valid_sources = [(s.strip(), mode) for s, mode in zip(sources, modes)
-                     if isinstance(s, str) and s.strip()]
-    valid_dests = [d.strip() for d in dests if isinstance(d, str) and d.strip()]
+    if len(dests) != len(sources):
+        return CopyResult(
+            success=False,
+            message=f"源路径（{len(sources)} 条）与目标路径（{len(dests)} 条）数量不一致，无法 1 对 1 配对",
+        )
 
-    if not valid_sources:
-        return CopyResult(success=False, message="无有效源路径")
-    if not valid_dests:
-        return CopyResult(success=False, message="无有效目标路径")
+    # (序号, 源, 目标, 复制类型)；两侧都空的空白行跳过
+    pairs = []
+    for idx, (src, dst, mode) in enumerate(zip(sources, dests, modes), start=1):
+        s = src.strip() if isinstance(src, str) else ""
+        d = dst.strip() if isinstance(dst, str) else ""
+        if s and d:
+            pairs.append((idx, s, d, mode))
+        elif s or d:
+            return CopyResult(
+                success=False,
+                message=f"第 {idx} 组「源 → 目标」只填了一边，源与目标必须同时填写",
+            )
+
+    if not pairs:
+        return CopyResult(success=False, message="无有效的源 → 目标配对")
 
     total_copied = 0
     total_failed = 0
     pair_errors = []
 
-    for src, mode in valid_sources:
-        for dst in valid_dests:
-            r = copy_folder_single(src, dst) if mode == BACKUP_FOLDER else copy_single(src, dst)
-            total_copied += r.files_copied
-            total_failed += r.files_failed if r.success else max(1, r.files_failed)
-            if not r.success:
-                src_name = os.path.basename(src)
-                dst_name = os.path.basename(dst) if not _is_directory_path(dst) else dst
-                pair_errors.append(f"{src_name}→{dst_name}: {r.message}")
+    for idx, src, dst, mode in pairs:
+        r = copy_folder_single(src, dst) if mode == BACKUP_FOLDER else copy_single(src, dst)
+        total_copied += r.files_copied
+        total_failed += r.files_failed if r.success else max(1, r.files_failed)
+        if not r.success:
+            src_name = os.path.basename(src)
+            dst_name = dst if _is_directory_path(dst) else os.path.basename(dst)
+            pair_errors.append(f"#{idx} {src_name}→{dst_name}: {r.message}")
 
-    total_pairs = len(valid_sources) * len(valid_dests)
+    total_pairs = len(pairs)
 
     if total_failed == 0 and len(pair_errors) == 0:
         return CopyResult(
             success=True,
-            message=f"全部成功: {total_copied} 个文件 ({total_pairs} 组复制)",
+            message=f"全部成功: {total_copied} 个文件 ({total_pairs} 组 1 对 1 复制)",
             files_copied=total_copied,
         )
     elif total_copied > 0:
@@ -368,56 +380,4 @@ def copy_all(sources: List[str], dests: List[str], source_modes: List[str] = Non
         )
 
 
-def copy_folder_all(sources: List[str], dests: List[str]) -> CopyResult:
-    """
-    每个源文件夹整体备份到每个目标文件夹（M×N）。
-    返回汇总结果。
-    """
-    if sources is None:
-        sources = []
-    if dests is None:
-        dests = []
 
-    valid_sources = [s.strip() for s in sources if isinstance(s, str) and s.strip()]
-    valid_dests = [d.strip() for d in dests if isinstance(d, str) and d.strip()]
-
-    if not valid_sources:
-        return CopyResult(success=False, message="无有效源路径")
-    if not valid_dests:
-        return CopyResult(success=False, message="无有效目标路径")
-
-    total_copied = 0
-    total_failed = 0
-    pair_errors = []
-
-    for src in valid_sources:
-        for dst in valid_dests:
-            r = copy_folder_single(src, dst)
-            total_copied += r.files_copied
-            total_failed += r.files_failed if r.success else max(1, r.files_failed)
-            if not r.success:
-                src_name = os.path.basename(src)
-                dst_name = os.path.basename(dst) if not _is_directory_path(dst) else dst
-                pair_errors.append(f"{src_name}→{dst_name}: {r.message}")
-
-    total_pairs = len(valid_sources) * len(valid_dests)
-
-    if total_failed == 0 and len(pair_errors) == 0:
-        return CopyResult(
-            success=True,
-            message=f"全部成功: {total_copied} 个文件 ({total_pairs} 组备份)",
-            files_copied=total_copied,
-        )
-    elif total_copied > 0:
-        return CopyResult(
-            success=False,
-            message=f"{total_copied} 成功, {total_failed} 失败 — {'; '.join(pair_errors[:3])}",
-            files_copied=total_copied,
-            files_failed=total_failed,
-        )
-    else:
-        return CopyResult(
-            success=False,
-            message=f"全部失败 ({total_pairs} 组) — {'; '.join(pair_errors[:3])}",
-            files_failed=total_failed,
-        )

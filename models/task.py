@@ -1,5 +1,5 @@
 """
-Task 数据模型 — 多个源 × 多个目标，全量复制
+Task 数据模型 — 多组「源 → 目标」按序号 1 对 1 配对复制
 """
 
 import uuid
@@ -20,7 +20,7 @@ from config import (
 
 @dataclass
 class Task:
-    """每条源路径按 source_modes 指定的类型复制到所有目标。"""
+    """源与目标按序号一一对应：源 #1 → 目标 #1、源 #2 → 目标 #2。"""
     name: str = "新任务"
     sources: List[str] = field(default_factory=lambda: [""])
     dests: List[str] = field(default_factory=lambda: [""])
@@ -61,9 +61,10 @@ class Task:
         return "整体备份(文件夹)" if modes == {BACKUP_FOLDER} else "文件复制"
 
     @property
-    def total_combinations(self) -> int:
-        """源 × 目标 的总复制组合数。"""
-        return len([s for s in self.sources if s.strip()]) * len([d for d in self.dests if d.strip()])
+    def pair_count(self) -> int:
+        """按序号配成的完整组数（该序号下源和目标都填写了）。"""
+        return sum(1 for src, dst in zip(self.sources, self.dests)
+                   if src.strip() and dst.strip())
 
     @staticmethod
     def from_dict(d: dict) -> "Task":
@@ -117,20 +118,18 @@ class Task:
         if not self.name.strip():
             errors.append("任务名称不能为空")
 
-        valid_sources = [s for s in self.sources if s.strip()]
-        valid_dests = [d for d in self.dests if d.strip()]
-
-        if not valid_sources:
-            errors.append("至少需要一个源路径")
-        if not valid_dests:
-            errors.append("至少需要一个目标路径")
-
-        for i, s in enumerate(self.sources):
-            if s.strip() and not s.strip():
-                errors.append(f"源 #{i+1} 不能为空")
-        for i, d in enumerate(self.dests):
-            if d.strip() and not d.strip():
-                errors.append(f"目标 #{i+1} 不能为空")
+        # 1 对 1 配对：两侧数量必须一致，且同一序号要么都填、要么都空
+        if len(self.sources) != len(self.dests):
+            errors.append(
+                f"源路径（{len(self.sources)} 条）与目标路径（{len(self.dests)} 条）"
+                "数量必须一致，才能按序号 1 对 1 配对"
+            )
+        else:
+            for i, (src, dst) in enumerate(zip(self.sources, self.dests)):
+                if bool(src.strip()) != bool(dst.strip()):
+                    errors.append(f"第 {i + 1} 组「源 → 目标」必须同时填写或同时留空")
+        if self.pair_count == 0:
+            errors.append("至少需要一组「源 → 目标」配对")
 
         if self.schedule_type not in SCHEDULE_TYPES:
             errors.append(f"无效的调度类型: {self.schedule_type}")
@@ -194,12 +193,15 @@ class Task:
         """列表显示的简短摘要。"""
         sc = len([s for s in self.sources if s.strip()])
         dc = len([d for d in self.dests if d.strip()])
-        if sc == 0 or dc == 0:
+        pairs = self.pair_count
+        if pairs == 0:
             return "未配置"
-        if sc == 1 and dc == 1:
+        if len(self.sources) == 1 and len(self.dests) == 1:
             s = self.sources[0]
             return s if len(s) <= 40 else "..." + s[-37:]
-        return f"{sc} 个源 × {dc} 个目标 = {sc * dc} 次复制"
+        if sc != dc:
+            return f"{sc} 个源 ≠ {dc} 个目标（需按序号配对）"
+        return f"{pairs} 组 1 对 1 复制"
 
     def __repr__(self) -> str:
-        return f"Task({self.name!r}, {len(self.sources)}src×{len(self.dests)}dst)"
+        return f"Task({self.name!r}, {self.pair_count} 组 1对1)"

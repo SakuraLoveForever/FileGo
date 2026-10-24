@@ -304,7 +304,7 @@ class MainWindow:
         group.add_task(task)
         self.app.save_state()
         self._panels[group.group_id].refresh()
-        self._panels[group.group_id].add_log(f"已添加任务 [{task.name}]: {task.total_combinations} 次复制")
+        self._panels[group.group_id].add_log(f"已添加任务 [{task.name}]: {task.pair_count} 组 1对1 复制")
 
     def _on_edit_task(self, group: TaskGroup, updated_task: Task):
         for i, t in enumerate(group.tasks):
@@ -330,7 +330,7 @@ class MainWindow:
         self.app.executor.enqueue(task, group, run_skipped=True)
         task.last_status = "running"
         self._panels[group.group_id].update_task_row(task)
-        self._panels[group.group_id].add_log(f"▶ 手动执行: [{task.name}] ({task.total_combinations} 次复制)")
+        self._panels[group.group_id].add_log(f"▶ 手动执行: [{task.name}] ({task.pair_count} 组 1对1 复制)")
         self._set_status(f"正在运行: {task.name}...")
 
     def _on_run_group(self, group: TaskGroup):

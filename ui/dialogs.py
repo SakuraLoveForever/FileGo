@@ -1,5 +1,5 @@
 """
-对话框 — 任务编辑（源列表 × 目标列表）、组编辑、设置
+对话框 — 任务编辑（源 → 目标 1 对 1 配对）、组编辑、设置
 """
 
 import tkinter as tk
@@ -11,7 +11,7 @@ try:
     from ttkbootstrap.widgets.scrolled import ScrolledFrame
 except ImportError:
     from ttkbootstrap.scrolled import ScrolledFrame
-from typing import Optional, List
+from typing import Callable, Optional, List
 
 from config import (
     SCHEDULE_INTERVAL,
@@ -37,12 +37,18 @@ class PathListEditor(ttk.Labelframe):
     """可编辑的路径列表 — 带添加/删除按钮的路径条目集合。"""
 
     def __init__(self, parent, title: str, paths: List[str], browse_dir: bool = False,
-                 source_modes: Optional[List[str]] = None, **kw):
+                 source_modes: Optional[List[str]] = None,
+                 on_add: Optional[Callable[[], None]] = None,
+                 on_remove: Optional[Callable[[int], None]] = None,
+                 add_text: str = "＋ 添加路径", **kw):
         super().__init__(parent, text=title, padding=6, **kw)
         self._paths: List[tk.StringVar] = []
         self._rows: List[ttk.Frame] = []
         self._browse_dir = browse_dir
         self._mode_vars = [] if source_modes is not None else None
+        self._on_add = on_add
+        self._on_remove = on_remove
+        self._add_text = add_text
         self._container = ttk.Frame(self)
         self._container.pack(fill=X)
 
@@ -56,9 +62,9 @@ class PathListEditor(ttk.Labelframe):
             self._add_row("")
 
         # 添加按钮
-        self._add_btn = ttk.Button(self, text="＋ 添加路径", bootstyle="success-link",
+        self._add_btn = ttk.Button(self, text=self._add_text, bootstyle="success-link",
                                    padding=(4, 2),
-                                   command=lambda: self._add_row(""))
+                                   command=self._on_add_clicked)
         self._add_btn.pack(anchor=W, pady=(3, 0))
 
     def _add_row(self, value: str, mode: str = BACKUP_FILE):
@@ -85,16 +91,37 @@ class PathListEditor(ttk.Labelframe):
 
         self._rows.append(row)
 
+    def _on_add_clicked(self):
+        """用户点「添加路径」：本列表加一行，同时通知配对列表也加一行。"""
+        self.add_blank_row()
+        if self._on_add is not None:
+            self._on_add()
+
+    def add_blank_row(self):
+        """静默添加一个空行（不触发配对回调）。"""
+        self._add_row("")
+
+    @property
+    def row_count(self) -> int:
+        return len(self._paths)
+
     def _remove_row(self, row: ttk.Frame, var: tk.StringVar):
         if len(self._paths) <= 1:
             messagebox.showwarning("提示", "至少保留一个路径", parent=self.winfo_toplevel())
             return
         idx = self._paths.index(var)
+        self._remove_at(idx)
+        if self._on_remove is not None:
+            self._on_remove(idx)
+
+    def _remove_at(self, idx: int):
+        """按序号删除一行（静默，不触发配对回调）。"""
+        if len(self._paths) <= 1 or not (0 <= idx < len(self._paths)):
+            return
         self._paths.pop(idx)
         if self._mode_vars is not None:
             self._mode_vars.pop(idx)
-        row.destroy()
-        self._rows.remove(row)
+        self._rows.pop(idx).destroy()
         self._renumber()
 
     def _renumber(self):
@@ -122,7 +149,7 @@ class PathListEditor(ttk.Labelframe):
 
 
 class TaskEditDialog(tk.Toplevel):
-    """添加/编辑任务 — 源列表 × 目标列表，全量复制。"""
+    """添加/编辑任务 — 源与目标按 #序号 1 对 1 配对复制。"""
 
     def __init__(self, parent, task: Optional[Task] = None):
         super().__init__(parent)
@@ -211,21 +238,33 @@ class TaskEditDialog(tk.Toplevel):
         src_col.pack(fill=X, pady=(0, 8))
 
         src_paths = task.sources if task else [""]
-        self._src_editor = PathListEditor(src_col, "📄 源路径", src_paths,
-                                          source_modes=task.source_modes if task else [BACKUP_FILE],
-                                          browse_dir=False, bootstyle="default")
+        self._src_editor = PathListEditor(
+            src_col, "📄 源路径", src_paths,
+            source_modes=task.source_modes if task else [BACKUP_FILE],
+            browse_dir=False,
+            on_add=lambda: self._dst_editor.add_blank_row(),
+            on_remove=lambda idx: self._dst_editor._remove_at(idx),
+            add_text="＋ 添加一组", bootstyle="default")
         self._src_editor.pack(fill=X)
 
         dst_col = ttk.Frame(columns)
         dst_col.pack(fill=X)
 
         dst_paths = task.dests if task else [""]
-        self._dst_editor = PathListEditor(dst_col, "📁 目标路径", dst_paths,
-                                          browse_dir=True, bootstyle="default")
+        self._dst_editor = PathListEditor(
+            dst_col, "📁 目标路径（与源同序号）", dst_paths,
+            browse_dir=True,
+            on_add=lambda: self._src_editor.add_blank_row(),
+            on_remove=lambda idx: self._src_editor._remove_at(idx),
+            add_text="＋ 添加一组", bootstyle="default")
         self._dst_editor.pack(fill=X)
 
+        # 旧任务源/目标数量可能不一致：补齐空行，保存时由校验提示如何调整
+        self._balance_editors()
+
         # ── 说明 ──
-        ttk.Label(outer, text="所有源 → 所有目标 · 类型逐条设置 · 文件夹备份保留目标已有文件",
+        ttk.Label(outer, text="源与目标按 #序号 一一对应复制：#1 源 → #1 目标，两边数量必须一致。\n"
+                              "每条源单独设置类型；整体备份(文件夹) 会合并进目标、保留目标已有文件。",
                   wraplength=scale_size(self, 540),
                   font=("", 8)).pack(anchor=W, pady=(6, 8))
 
@@ -282,6 +321,14 @@ class TaskEditDialog(tk.Toplevel):
         # ── 按钮 ──
         ttk.Button(btns, text="保存", width=7, bootstyle="primary", command=self._on_save).pack(side=RIGHT)
         ttk.Button(btns, text="取消", width=7, bootstyle="secondary-link", command=self.destroy).pack(side=RIGHT, padx=(0, 6))
+
+    def _balance_editors(self):
+        """让源/目标列表行数一致，便于按序号编辑（旧任务的列表可能不对称）。"""
+        diff = self._src_editor.row_count - self._dst_editor.row_count
+        for _ in range(diff):
+            self._dst_editor.add_blank_row()
+        for _ in range(-diff):
+            self._src_editor.add_blank_row()
 
     def _on_type_change(self):
         st = self._type_var.get()

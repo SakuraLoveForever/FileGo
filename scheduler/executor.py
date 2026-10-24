@@ -1,5 +1,5 @@
 """
-执行器线程 — 从队列中取出任务，执行源×目标全量复制
+执行器线程 — 从队列中取出任务，按 1 对 1 配对执行复制
 """
 
 import queue
@@ -14,7 +14,7 @@ from services.file_copy import copy_all
 
 
 class Executor(threading.Thread):
-    """后台线程：消费任务队列，执行 M×N 全量复制。"""
+    """后台线程：消费任务队列，执行源 → 目标的 1 对 1 配对复制。"""
 
     def __init__(self, on_result: Callable[[Task, TaskGroup, bool, str], None]):
         super().__init__(daemon=True, name="FileGo-Executor")
@@ -51,8 +51,8 @@ class Executor(threading.Thread):
         if not run_skipped and not task.enabled:
             return
 
-        combos = task.total_combinations
-        logger.info(f"执行: [{task.name}] {len(task.sources)}源×{len(task.dests)}目标 = {combos}次复制")
+        pairs = task.pair_count
+        logger.info(f"执行: [{task.name}] {pairs} 组 1对1 复制")
         self._on_result(task, group, True, STATUS_RUNNING)
 
         result = copy_all(task.sources, task.dests, task.source_modes)

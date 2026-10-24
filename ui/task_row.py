@@ -120,7 +120,7 @@ class TaskRow(ttk.Frame):
         self.task = task
         self._enabled_var.set(task.enabled)
 
-        # 源×目标 摘要
+        # 源 → 目标 配对摘要
         srcs = task.sources if isinstance(task.sources, list) else []
         dsts = task.dests if isinstance(task.dests, list) else []
         sc = len([s for s in srcs if isinstance(s, str) and s.strip()])
@@ -131,10 +131,12 @@ class TaskRow(ttk.Frame):
             mode = next(mode for source, mode in zip(srcs, task.source_modes) if source.strip())
             icon = "📁" if mode == BACKUP_FOLDER else "📄"
             self._pair_info_var.set(f"{icon} {src}")
-        elif sc == 0 or dc == 0:
+        elif task.pair_count == 0:
             self._pair_info_var.set("未配置")
+        elif sc != dc:
+            self._pair_info_var.set(f"⚠ {sc}源 ≠ {dc}目标，需按序号配对")
         else:
-            self._pair_info_var.set(f"📦 {sc}源 × {dc}目标 = {sc*dc}次复制")
+            self._pair_info_var.set(f"🔗 {task.pair_count} 组 1对1 复制")
 
         # 状态标签
         status = task.last_status
@@ -180,7 +182,7 @@ class TaskRow(ttk.Frame):
         self._callbacks.get("on_edit", lambda t: None)(self.task)
 
     def _on_delete(self):
-        pairs_info = f"{self.task.total_combinations} 次复制" if self.task.total_combinations > 0 else "无文件"
+        pairs_info = f"{self.task.pair_count} 组 1对1 复制" if self.task.pair_count > 0 else "无文件"
         if messagebox.askyesno("确认删除",
                                f"确定要删除任务 [{self.task.name}] 吗？\n\n{pairs_info}\n\n此操作不可撤销。"):
             self._callbacks.get("on_delete", lambda t: None)(self.task)

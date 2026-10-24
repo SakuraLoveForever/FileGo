@@ -7,7 +7,7 @@ import threading
 from datetime import datetime
 from typing import List
 
-from config import logger, STATUS_SUCCESS
+from config import logger, STATUS_IDLE, STATUS_RUNNING, STATUS_SUCCESS
 from models.task import Task
 from models.task_group import TaskGroup
 from persistence.store import Store
@@ -69,6 +69,9 @@ class App:
         now = datetime.now()
         for group in self.groups:
             for task in group.tasks:
+                # 上次运行被中断（程序已退出）残留的 running 状态 → 恢复为空闲
+                if task.last_status == STATUS_RUNNING:
+                    task.last_status = STATUS_IDLE
                 if task.enabled and task.next_run is None:
                     next_run = task.compute_next_run(now)
                     if next_run:

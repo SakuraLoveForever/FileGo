@@ -8,12 +8,13 @@ from services.file_copy import copy_all, copy_single, copy_folder_single, _copy_
 
 
 class CopySafetyTests(unittest.TestCase):
-    def test_self_copy_preserves_source_and_continues_to_next_destination(self):
+    def test_self_copy_is_skipped_and_next_pair_still_copies(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "note.txt"
             source.write_bytes(b"original")
-            result = copy_all([str(source)], [str(root), str(root / "backup")])
+            result = copy_all([str(source), str(source)],
+                              [str(root), str(root / "backup")])
             self.assertTrue(result.success, result.message)
             self.assertEqual(source.read_bytes(), b"original")
             self.assertEqual((root / "backup" / "note.txt").read_bytes(), b"original")
@@ -147,7 +148,8 @@ class CopySafetyTests(unittest.TestCase):
             root = Path(tmp)
             source = root / "note.txt"
             source.write_bytes(b"good")
-            result = copy_all([str(source), str(root / "missing.txt")], [str(root / "backup")])
+            result = copy_all([str(source), str(root / "missing.txt")],
+                              [str(root / "backup"), str(root / "backup2")])
             self.assertFalse(result.success)
             self.assertEqual(result.files_copied, 1)
             self.assertEqual(result.files_failed, 1)
