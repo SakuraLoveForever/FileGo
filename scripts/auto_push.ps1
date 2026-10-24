@@ -3,7 +3,8 @@
 # Registered as the Windows scheduled task "FileGo-DailyPush" (every day 00:00).
 # It commits every change (respecting .gitignore) as an "auto snapshot" commit and
 # pushes the current branch to origin. When there is nothing to commit it exits
-# quietly without touching git history.
+# without touching git history; when an earlier push failed it still retries,
+# because the push step depends on "local ahead of origin", not on new changes.
 #
 # Log: %LOCALAPPDATA%\FileGo\auto_push.log
 # Keep this file ASCII-only: Windows PowerShell 5.1 reads scripts as ANSI, and
@@ -40,29 +41,50 @@ if (-not (Test-Path (Join-Path $repoRoot ".git"))) {
     Fail "not a git repository: $repoRoot"
 }
 
-$status = & git -C $repoRoot status --porcelain 2>$null
-if (-not $status) {
-    Write-Log "no changes, nothing to push"
-    exit 0
-}
-
-& git -C $repoRoot add -A 2>$null | Out-Null
-$staged = & git -C $repoRoot diff --cached --name-only 2>$null
-if (-not $staged) {
-    Write-Log "ignore-only changes, nothing to commit"
-    exit 0
-}
-
 # symbolic-ref works on an unborn HEAD (fresh repo, no commits yet); rev-parse does not.
 $branch = & git -C $repoRoot symbolic-ref --short -q HEAD 2>$null
 if (-not $branch) {
     Fail "detached HEAD, cannot push"
 }
 
-$stamp = Get-Date -Format "yyyy-MM-dd HH:mm"
-& git -C $repoRoot commit -m "auto snapshot: $stamp" 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    Fail "git commit failed with exit code $LASTEXITCODE"
+# 1) Snapshot local changes. Ignored files (build output, __pycache__, ...) are skipped.
+$status = & git -C $repoRoot status --porcelain 2>$null
+if ($status) {
+    & git -C $repoRoot add -A 2>$null | Out-Null
+    $staged = & git -C $repoRoot diff --cached --name-only 2>$null
+    if ($staged) {
+        $stamp = Get-Date -Format "yyyy-MM-dd HH:mm"
+        & git -C $repoRoot commit -m "auto snapshot: $stamp" 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Fail "git commit failed with exit code $LASTEXITCODE"
+        }
+        Write-Log ("committed {0} changed file(s)" -f (($staged | Measure-Object).Count))
+    }
+    else {
+        Write-Log "only ignored files changed, nothing to commit"
+    }
+}
+else {
+    Write-Log "no local changes"
+}
+
+# 2) Push when the local branch is ahead of origin. This also retries a push that
+#    failed on an earlier day even if nothing has changed since then.
+$hasRemote = & git -C $repoRoot rev-parse --verify --quiet "origin/$branch" 2>$null
+$ahead = 0
+if ($hasRemote) {
+    $cnt = & git -C $repoRoot rev-list --count "origin/$branch..HEAD" 2>$null
+    if ($cnt) {
+        $ahead = [int]$cnt
+    }
+}
+else {
+    $ahead = 1
+}
+
+if ($ahead -eq 0) {
+    Write-Log "nothing to push, origin/$branch is up to date"
+    exit 0
 }
 
 & git -C $repoRoot push origin $branch 2>$null | Out-Null
@@ -71,10 +93,9 @@ if ($LASTEXITCODE -ne 0) {
     & git -C $repoRoot pull --rebase --autostash origin $branch 2>$null | Out-Null
     & git -C $repoRoot push origin $branch 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        Fail "git push failed again; the snapshot is committed locally only"
+        Fail "git push failed; $ahead commit(s) stay local and will be retried tomorrow"
     }
 }
 
-$count = ($staged | Measure-Object).Count
-Write-Log "pushed $count changed file(s) to origin/$branch"
+Write-Log "pushed $ahead commit(s) to origin/$branch"
 exit 0

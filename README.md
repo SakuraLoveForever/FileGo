@@ -122,7 +122,7 @@ py -3.12 -m PyInstaller --noconfirm --clean FileGo-debug.spec
 
 ## 每日自动提交并推送（可选）
 
-仓库自带 `scripts/auto_push.ps1`：把工作区所有改动（遵循 `.gitignore`）提交为一条 `auto snapshot: YYYY-MM-DD HH:mm` 快照，并推送到 `origin` 的当前分支；**没有改动时静默跳过**，不会产生空提交。推送被拒（远端有新提交）时会自动 `pull --rebase --autostash` 后重试一次。
+仓库自带 `scripts/auto_push.ps1`：把工作区所有改动（遵循 `.gitignore`）提交为一条 `auto snapshot: YYYY-MM-DD HH:mm` 快照，并推送到 `origin` 的当前分支；**没有改动时静默跳过**，不会产生空提交。推送被拒（远端有新提交）时会自动 `pull --rebase --autostash` 后重试一次；如果 push 因网络/凭据问题彻底失败，快照会留在本地，之后的每一次运行都会重试推送，直到成功。
 
 Windows 计划任务 `FileGo-DailyPush` 每天 **00:00** 调用它；电脑当时睡眠/关机的话，Windows 会在恢复后补跑（StartWhenAvailable）。日志写入 `%LOCALAPPDATA%\FileGo\auto_push.log`，失败时末尾会有一行 `ERROR: ...`。
 
