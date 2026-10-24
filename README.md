@@ -120,6 +120,32 @@ py -3.12 -m PyInstaller --noconfirm --clean FileGo-debug.spec
 
 构建产物输出到 `dist/` 目录。
 
+## 每日自动提交并推送（可选）
+
+仓库自带 `scripts/auto_push.ps1`：把工作区所有改动（遵循 `.gitignore`）提交为一条 `auto snapshot: YYYY-MM-DD HH:mm` 快照，并推送到 `origin` 的当前分支；**没有改动时静默跳过**，不会产生空提交。推送被拒（远端有新提交）时会自动 `pull --rebase --autostash` 后重试一次。
+
+Windows 计划任务 `FileGo-DailyPush` 每天 **00:00** 调用它；电脑当时睡眠/关机的话，Windows 会在恢复后补跑（StartWhenAvailable）。日志写入 `%LOCALAPPDATA%\FileGo\auto_push.log`，失败时末尾会有一行 `ERROR: ...`。
+
+手动运行一次：
+
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\auto_push.ps1
+```
+
+首次注册或更换电脑/仓库路径后，重新注册计划任务：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_daily_push.ps1
+```
+
+删除该计划任务：
+
+```bash
+schtasks /delete /tn FileGo-DailyPush /f
+```
+
+> 注意：任务以当前用户身份、仅在用户登录时运行（不保存密码），因此请确保 `git push` 所需的 GitHub 凭据已由 Git Credential Manager 记住（正常推送过一次即可）。
+
 ## 数据存储
 
 所有数据存储在 `%USERPROFILE%\.filego\` 目录下：
