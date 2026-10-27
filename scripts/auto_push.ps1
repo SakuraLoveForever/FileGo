@@ -20,6 +20,28 @@ if (-not (Test-Path $logDir)) {
     New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 }
 
+# git.exe and its credential helper are console programs. -WindowStyle Hidden only
+# hides THIS script's own console, not the ones Windows creates for its children, so
+# starting them through & flashes a window on the desktop. CreateNoWindow stops that.
+function Invoke-Git {
+    param([string[]]$Arguments)
+    $quoted = @($Arguments | ForEach-Object { '"' + ($_ -replace '"', '\"') + '"' }) -join ' '
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "git"
+    if ($quoted) { $psi.Arguments = $quoted }
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $stdout = $proc.StandardOutput.ReadToEnd()
+    $proc.StandardError.ReadToEnd() | Out-Null
+    $proc.WaitForExit()
+    $global:LASTEXITCODE = $proc.ExitCode
+    if (-not $stdout) { return @() }
+    return @($stdout -split "`r?`n" | Where-Object { $_ -ne "" })
+}
+
 function Write-Log([string]$Message) {
     $line = "{0}  {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Message
     Add-Content -Path $logFile -Value $line -Encoding UTF8
@@ -42,19 +64,19 @@ if (-not (Test-Path (Join-Path $repoRoot ".git"))) {
 }
 
 # symbolic-ref works on an unborn HEAD (fresh repo, no commits yet); rev-parse does not.
-$branch = & git -C $repoRoot symbolic-ref --short -q HEAD 2>$null
+$branch = Invoke-Git @("-C", $repoRoot, "symbolic-ref", "--short", "-q", "HEAD")
 if (-not $branch) {
     Fail "detached HEAD, cannot push"
 }
 
 # 1) Snapshot local changes. Ignored files (build output, __pycache__, ...) are skipped.
-$status = & git -C $repoRoot status --porcelain 2>$null
+$status = Invoke-Git @("-C", $repoRoot, "status", "--porcelain")
 if ($status) {
-    & git -C $repoRoot add -A 2>$null | Out-Null
-    $staged = & git -C $repoRoot diff --cached --name-only 2>$null
+    Invoke-Git @("-C", $repoRoot, "add", "-A") | Out-Null
+    $staged = Invoke-Git @("-C", $repoRoot, "diff", "--cached", "--name-only")
     if ($staged) {
         $stamp = Get-Date -Format "yyyy-MM-dd HH:mm"
-        & git -C $repoRoot commit -m "auto snapshot: $stamp" 2>$null | Out-Null
+        Invoke-Git @("-C", $repoRoot, "commit", "-m", "auto snapshot: $stamp") | Out-Null
         if ($LASTEXITCODE -ne 0) {
             Fail "git commit failed with exit code $LASTEXITCODE"
         }
@@ -70,10 +92,10 @@ else {
 
 # 2) Push when the local branch is ahead of origin. This also retries a push that
 #    failed on an earlier day even if nothing has changed since then.
-$hasRemote = & git -C $repoRoot rev-parse --verify --quiet "origin/$branch" 2>$null
+$hasRemote = Invoke-Git @("-C", $repoRoot, "rev-parse", "--verify", "--quiet", "origin/$branch")
 $ahead = 0
 if ($hasRemote) {
-    $cnt = & git -C $repoRoot rev-list --count "origin/$branch..HEAD" 2>$null
+    $cnt = Invoke-Git @("-C", $repoRoot, "rev-list", "--count", "origin/$branch..HEAD")
     if ($cnt) {
         $ahead = [int]$cnt
     }
@@ -87,11 +109,11 @@ if ($ahead -eq 0) {
     exit 0
 }
 
-& git -C $repoRoot push origin $branch 2>$null | Out-Null
+Invoke-Git @("-C", $repoRoot, "push", "origin", $branch) | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Write-Log "push rejected, retrying after pull --rebase --autostash"
-    & git -C $repoRoot pull --rebase --autostash origin $branch 2>$null | Out-Null
-    & git -C $repoRoot push origin $branch 2>$null | Out-Null
+    Invoke-Git @("-C", $repoRoot, "pull", "--rebase", "--autostash", "origin", $branch) | Out-Null
+    Invoke-Git @("-C", $repoRoot, "push", "origin", $branch) | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Fail "git push failed; $ahead commit(s) stay local and will be retried tomorrow"
     }
