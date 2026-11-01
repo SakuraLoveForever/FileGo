@@ -2,10 +2,14 @@
 TaskRow — 单个任务在列表中的显示行（ttkbootstrap 美化版）
 """
 
+import os
+from pathlib import Path
+import subprocess
 import tkinter as tk
 from tkinter import messagebox
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
+from ttkbootstrap.tooltip import ToolTip
 
 from config import (
     SCHEDULE_INTERVAL,
@@ -36,6 +40,7 @@ class TaskRow(ttk.Frame):
         self._status_var = tk.StringVar()
         self._next_run_var = tk.StringVar()
         self._pair_info_var = tk.StringVar()
+        self._displayed_paths = None
         self._build()
 
     def _build(self):
@@ -77,6 +82,11 @@ class TaskRow(ttk.Frame):
                    command=self._on_edit, width=5).pack(side=LEFT, padx=2)
         ttk.Button(btn_frame, text="删除", bootstyle="danger-outline",
                    command=self._on_delete, width=5).pack(side=LEFT, padx=2)
+
+        # 每组复制关系分为来源、目标两行，路径可横向滚动和复制。
+        self._paths_frame = ttk.Frame(self)
+        self._paths_frame.pack(fill=X, padx=(22, 0), pady=(6, 0))
+        self._paths_frame.columnconfigure(1, weight=1)
 
         # 信息行：调度信息 + 上次运行 + 下次运行
         info = ttk.Frame(self)
@@ -125,18 +135,41 @@ class TaskRow(ttk.Frame):
         dsts = task.dests if isinstance(task.dests, list) else []
         sc = len([s for s in srcs if isinstance(s, str) and s.strip()])
         dc = len([d for d in dsts if isinstance(d, str) and d.strip()])
-        if sc == 1 and dc == 1 and srcs:
-            s = next(s for s in srcs if s.strip())
-            src = s if len(s) <= 30 else "..." + s[-27:]
-            mode = next(mode for source, mode in zip(srcs, task.source_modes) if source.strip())
-            icon = "📁" if mode == BACKUP_FOLDER else "📄"
-            self._pair_info_var.set(f"{icon} {src}")
-        elif task.pair_count == 0:
+        if task.pair_count == 0:
             self._pair_info_var.set("未配置")
         elif sc != dc:
             self._pair_info_var.set(f"⚠ {sc}源 ≠ {dc}目标，需按序号配对")
         else:
             self._pair_info_var.set(f"🔗 {task.pair_count} 组 1对1 复制")
+
+        paths = (tuple(srcs), tuple(dsts))
+        if paths != self._displayed_paths:
+            self._displayed_paths = paths
+            for widget in self._paths_frame.winfo_children():
+                widget.destroy()
+            for i in range(max(len(srcs), len(dsts))):
+                source = srcs[i] if i < len(srcs) else ""
+                dest = dsts[i] if i < len(dsts) else ""
+                if not source.strip() and not dest.strip():
+                    continue
+                for offset, (label, path) in enumerate((("来源", source), ("目标", dest))):
+                    row = i * 2 + offset
+                    pady = (6 if i and offset == 0 else 1, 1)
+                    ttk.Label(self._paths_frame, text=f"#{i + 1} {label}",
+                              bootstyle="secondary", font=("", 9)).grid(
+                        row=row, column=0, sticky=W, padx=(0, 8), pady=pady)
+                    entry = ttk.Entry(self._paths_frame, width=1, font=("", 9))
+                    entry.insert(0, path or "未配置")
+                    entry.configure(state="readonly")
+                    entry.grid(row=row, column=1, sticky=EW, pady=pady)
+                    ToolTip(entry, text=path or "未配置")
+                    button = ttk.Button(
+                        self._paths_frame, text="打开", width=4,
+                        bootstyle="secondary-outline", padding=(4, 1),
+                        state=NORMAL if path.strip() else DISABLED,
+                        command=lambda p=path: self._open_location(p))
+                    button.grid(row=row, column=2, padx=(6, 0), pady=pady)
+                    ToolTip(button, text="在文件资源管理器中打开位置")
 
         # 状态标签
         status = task.last_status
@@ -171,6 +204,22 @@ class TaskRow(ttk.Frame):
                 self._next_run_var.set("已禁用")
             else:
                 self._next_run_var.set("等待调度...")
+
+    def _open_location(self, path: str):
+        """文件选中定位，文件夹直接打开；通配符定位到所在文件夹。"""
+        try:
+            location = Path(os.path.abspath(path))
+            if "*" in path or "?" in path:
+                while "*" in str(location) or "?" in str(location):
+                    location = location.parent
+            if location.is_dir():
+                os.startfile(str(location))
+            elif location.is_file():
+                subprocess.Popen(["explorer.exe", f"/select,{location}"])
+            else:
+                messagebox.showwarning("无法打开位置", f"路径不存在：\n{path}", parent=self)
+        except OSError as exc:
+            messagebox.showwarning("无法打开位置", str(exc), parent=self)
 
     def _on_toggle(self):
         self._callbacks.get("on_toggle", lambda t: None)(self.task)
